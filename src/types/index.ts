@@ -99,3 +99,35 @@ export interface IndexResult {
   classes: string[];
   enums: string[];
 }
+
+// --- Search engine types ---
+
+export interface BM25Doc {
+  readonly id: string;
+  readonly fields: {
+    readonly title?: string;
+    readonly path?: string;
+    readonly description?: string;
+    readonly content?: string;
+  };
+}
+
+export interface BM25Result {
+  readonly id: string;
+  readonly score: number;
+}
+
+export interface SearchOptions {
+  readonly limit?: number;
+  readonly types?: ReadonlyArray<"api" | "guide">;
+}
+
+export interface SearchResult {
+  readonly type: "api" | "guide";
+  readonly name: string;
+  readonly path?: string;
+  readonly score: number;
+  readonly category?: string;
+  readonly title?: string;
+  readonly description?: string;
+}
