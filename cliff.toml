@@ -1,0 +1,65 @@
+# git-cliff configuration
+# https://git-cliff.org/docs/configuration
+
+[changelog]
+header = ""
+trim = true
+body = """
+{% if version %}\
+## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+## [Unreleased]
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim | upper_first }}
+{% for commit in commits %}
+- {{ commit.message | upper_first }}\
+{% if commit.github.pr_number %} ([#{{ commit.github.pr_number }}](https://github.com/{{ remote.github.owner }}/{{ remote.github.repo }}/pull/{{ commit.github.pr_number }})){% endif %} \
+({{ commit.id | truncate(length=7, end="") }})\
+{% if commit.github.username %} by @{{ commit.github.username }}{% endif %}
+{% endfor %}
+{% endfor %}
+"""
+# Texto quando não há commits
+empty = "- No changes found."
+
+[git]
+conventional_commits = true
+filter_unconventional = false
+split_commits = false
+
+commit_preprocessors = [
+  { pattern = "\\(#([0-9]+)\\)", replace = "([#${1}](https://github.com/iamthebestts/RoDocs-MCP/pull/${1}))" },
+]
+
+commit_parsers = [
+  { message = "^feat", group = "Added" },
+  { message = "^add", group = "Added" },
+  { message = "^new", group = "Added" },
+  { message = "^fix", group = "Fixed" },
+  { message = "^bugfix", group = "Fixed" },
+  { message = "^refactor", group = "Changed" },
+  { message = "^perf", group = "Changed" },
+  { message = "^style", group = "Changed" },
+  { message = "^update", group = "Changed" },
+  { message = "^improve", group = "Changed" },
+  { message = "^chore", group = "Dev" },
+  { message = "^test", group = "Dev" },
+  { message = "^ci", group = "Dev" },
+  { message = "^build", group = "Dev" },
+  { message = "^docs", group = "Dev" },
+  { message = "^deps", group = "Dev" },
+  { message = "^setup", group = "Dev" },
+  { body = ".*security", group = "Security" },
+  { message = "^revert", group = "Reverted" },
+  { message = ".*", group = "Other" },
+]
+
+protect_breaking_commits = false
+filter_commits = false
+tag_pattern = "v[0-9].*"
+sort_commits = "oldest"
+
+[remote.github]
+owner = "iamthebestts"
+repo = "RoDocs-MCP"
