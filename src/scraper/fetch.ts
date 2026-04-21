@@ -89,22 +89,14 @@ async function loadApiDump(): Promise<RawApiDump> {
     cachedDump = data;
     return data;
   } catch (err: unknown) {
-    throw new Error(
-      `Failed to load API dump: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    throw new Error(`Failed to load API dump: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
 // ! Creator Hub scraper
 
 const BASE_URL = "https://create.roblox.com/docs/reference/engine";
-const CATEGORIES = [
-  "classes",
-  "datatypes",
-  "enums",
-  "libraries",
-  "globals",
-] as const;
+const CATEGORIES = ["classes", "datatypes", "enums", "libraries", "globals"] as const;
 
 type Category = (typeof CATEGORIES)[number];
 
@@ -203,16 +195,11 @@ function extractDocEntry(html: string): RobloxDocEntry | null {
 
 // ! Doc builder
 
-function buildDocObject(
-  apiRef: RawApiRef,
-  parents: RawApiRef[],
-): RobloxDocEntry {
+function buildDocObject(apiRef: RawApiRef, parents: RawApiRef[]): RobloxDocEntry {
   const targetName = apiRef.name ?? "Unknown";
 
   const ownMembers: OwnMembers = {
-    properties: (apiRef.properties ?? []).map((p) =>
-      enrichMember(p, targetName),
-    ),
+    properties: (apiRef.properties ?? []).map((p) => enrichMember(p, targetName)),
     methods: (apiRef.methods ?? []).map((m) => enrichMember(m, targetName)),
     events: (apiRef.events ?? []).map((e) => enrichMember(e, targetName)),
     callbacks: (apiRef.callbacks ?? []).map((c) => enrichMember(c, targetName)),
@@ -222,14 +209,10 @@ function buildDocObject(
     const fromClass = parent.name ?? "Unknown";
     return {
       fromClass,
-      properties: (parent.properties ?? []).map((p) =>
-        enrichMember(p, fromClass),
-      ),
+      properties: (parent.properties ?? []).map((p) => enrichMember(p, fromClass)),
       methods: (parent.methods ?? []).map((m) => enrichMember(m, fromClass)),
       events: (parent.events ?? []).map((e) => enrichMember(e, fromClass)),
-      callbacks: (parent.callbacks ?? []).map((c) =>
-        enrichMember(c, fromClass),
-      ),
+      callbacks: (parent.callbacks ?? []).map((c) => enrichMember(c, fromClass)),
     };
   });
 
@@ -241,10 +224,7 @@ function buildDocObject(
     callbacks: [],
   };
 
-  const mergeGroup = (
-    key: keyof OwnMembers,
-    source: OwnMembers | InheritedGroup,
-  ) => {
+  const mergeGroup = (key: keyof OwnMembers, source: OwnMembers | InheritedGroup) => {
     for (const member of source[key]) {
       if (!seen.has(member.name)) {
         seen.add(member.name);
@@ -327,10 +307,8 @@ function unescapeCode(raw: string): string {
 }
 
 function detectLanguage(code: string): CodeSample["language"] {
-  if (/\b(local |game:GetService|:Connect\(|task\.wait|print\()\b/.test(code))
-    return "luau";
-  if (/\b(import |const |let |=>|async |await )\b/.test(code))
-    return "typescript";
+  if (/\b(local |game:GetService|:Connect\(|task\.wait|print\()\b/.test(code)) return "luau";
+  if (/\b(import |const |let |=>|async |await )\b/.test(code)) return "typescript";
   if (/\b(def |import .*from|__init__)\b/.test(code)) return "python";
   return "luau";
 }
@@ -368,10 +346,7 @@ export async function fetchIndex(): Promise<{
   return { classes, enums };
 }
 
-export function findClosestMatch(
-  topic: string,
-  names: string[],
-): string | null {
+export function findClosestMatch(topic: string, names: string[]): string | null {
   const lower = topic.toLowerCase();
 
   const exact = names.find((n) => n.toLowerCase() === lower);

@@ -64,10 +64,7 @@ export async function scrapeMany(topics: string[]): Promise<ScrapeOutcome[]> {
     const topic = topics[i] ?? String(i);
     if (result.status === "fulfilled") return result.value;
 
-    const error =
-      result.reason instanceof Error
-        ? result.reason.message
-        : String(result.reason);
+    const error = result.reason instanceof Error ? result.reason.message : String(result.reason);
 
     return { ok: false, topic, error };
   });
@@ -81,9 +78,7 @@ export async function scrapeIndex(): Promise<IndexResult> {
 }
 
 /** Fuzzy-matches a query against all known API names. Returns null if nothing found. */
-export async function findClosestApiName(
-  query: string,
-): Promise<string | null> {
+export async function findClosestApiName(query: string): Promise<string | null> {
   const { classes, enums } = await getIndexSnapshot();
   return findClosestMatch(query, [...classes, ...enums]);
 }
