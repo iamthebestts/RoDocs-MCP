@@ -1,12 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { RichMember, RobloxDocEntry } from "../scraper/fetch.js";
-import {
-  findClosestApiName,
-  scrapeIndex,
-  scrapeMany,
-  scrapeTopic,
-} from "../scraper/index.js";
+import { fetchGuide, fetchGuideIndex } from "../scraper/guides.js";
+import { scrapeIndex, scrapeMany, scrapeTopic } from "../scraper/index.js";
+import { search, searchGuides, warmUp } from "../scraper/search.js";
 
 interface AIMember {
   name: string;
@@ -45,9 +42,7 @@ function flattenType(raw: unknown): string {
   return "unknown";
 }
 
-function flattenParams(
-  raw: unknown[] | undefined,
-): AIMember["parameters"] | undefined {
+function flattenParams(raw: unknown[] | undefined): AIMember["parameters"] | undefined {
   if (raw === undefined || raw.length === 0) return undefined;
   return raw.map((p) => {
     const param = p as Record<string, unknown>;
@@ -114,48 +109,37 @@ function projectMember(
 }
 
 function projectForAI(entry: RobloxDocEntry): AIEntry {
-  const c = entry.class;
+  const cl = entry.class;
 
   const ownMembers: AIMember[] = [
-    ...c.ownMembers.properties.map((m) => projectMember(m, "property", false)),
-    ...c.ownMembers.methods.map((m) => projectMember(m, "method", false)),
-    ...c.ownMembers.events.map((m) => projectMember(m, "event", false)),
-    ...c.ownMembers.callbacks.map((m) => projectMember(m, "callback", false)),
+    ...cl.ownMembers.properties.map((m) => projectMember(m, "property", false)),
+    ...cl.ownMembers.methods.map((m) => projectMember(m, "method", false)),
+    ...cl.ownMembers.events.map((m) => projectMember(m, "event", false)),
+    ...cl.ownMembers.callbacks.map((m) => projectMember(m, "callback", false)),
   ];
 
-  const inheritedMembers: AIMember[] = entry.inheritedMembers.flatMap(
-    (group) => [
-      ...group.properties.map((m) =>
-        projectMember(m, "property", true, group.fromClass),
-      ),
-      ...group.methods.map((m) =>
-        projectMember(m, "method", true, group.fromClass),
-      ),
-      ...group.events.map((m) =>
-        projectMember(m, "event", true, group.fromClass),
-      ),
-      ...group.callbacks.map((m) =>
-        projectMember(m, "callback", true, group.fromClass),
-      ),
-    ],
-  );
+  const inheritedMembers: AIMember[] = entry.inheritedMembers.flatMap((group) => [
+    ...group.properties.map((m) => projectMember(m, "property", true, group.fromClass)),
+    ...group.methods.map((m) => projectMember(m, "method", true, group.fromClass)),
+    ...group.events.map((m) => projectMember(m, "event", true, group.fromClass)),
+    ...group.callbacks.map((m) => projectMember(m, "callback", true, group.fromClass)),
+  ]);
 
   const result: AIEntry = {
-    name: c.name,
+    name: cl.name,
     kind: "class",
-    summary: cleanText(c.summary || c.description),
-    inherits: c.inherits,
-    deprecated:
-      c.deprecationMessage.length > 0 || c.tags.includes("Deprecated"),
+    summary: cleanText(cl.summary || cl.description),
+    inherits: cl.inherits,
+    deprecated: cl.deprecationMessage.length > 0 || cl.tags.includes("Deprecated"),
     members: [...ownMembers, ...inheritedMembers],
-    codeSamples: c.codeSamples.map((s) => ({
+    codeSamples: cl.codeSamples.map((s) => ({
       title: s.displayName || s.identifier,
       language: s.language,
       code: s.code,
     })),
   };
 
-  if (c.deprecationMessage) result.deprecationMessage = c.deprecationMessage;
+  if (cl.deprecationMessage) result.deprecationMessage = cl.deprecationMessage;
 
   return result;
 }
@@ -167,6 +151,9 @@ export function createServer(): McpServer {
     name: "rodocsmcp",
     version: "1.0.0",
   });
+
+  // Warm up search indices in the background on server start
+  warmUp();
 
   server.registerTool(
     "get_api_reference",
@@ -247,11 +234,7 @@ export function createServer(): McpServer {
         content: [
           {
             type: "text" as const,
-            text: JSON.stringify(
-              { classes: result.classes, enums: result.enums },
-              null,
-              2,
-            ),
+            text: JSON.stringify({ classes: result.classes, enums: result.enums }, null, 2),
           },
         ],
       };
@@ -263,25 +246,108 @@ export function createServer(): McpServer {
     {
       title: "Find Closest Roblox API Name",
       description:
-        "Fuzzy-searches all known class and enum names for the closest match to a query. " +
+        "BM25-searches all known class and enum names for the closest match to a query. " +
         "Use this when you have an approximate or misspelled name and need the exact spelling " +
-        "before calling get_api_reference.",
+        "before calling get_api_reference. Also resolves common aliases (e.g. 'datastore').",
       inputSchema: {
-        query: z
-          .string()
-          .min(1)
-          .describe("Partial or approximate API name to search for."),
+        query: z.string().min(1).describe("Partial or approximate API name to search for."),
       },
     },
     async ({ query }) => {
-      const match = await findClosestApiName(query);
+      const results = await search(query, { types: ["api"], limit: 1 });
+      const top = results[0];
       const payload =
-        match !== null ? { found: true, match } : { found: false, match: null };
+        top !== undefined ? { found: true, match: top.name } : { found: false, match: null };
       return {
         content: [
           {
             type: "text" as const,
             text: JSON.stringify(payload, null, 2),
+          },
+        ],
+      };
+    },
+  );
+
+  server.registerTool(
+    "search_guides",
+    {
+      title: "Search Roblox Creator Guides",
+      description:
+        "BM25-searches the Roblox creator-docs repository for guides, tutorials and documentation pages " +
+        "matching a free-text query. Returns up to 10 results with path, title, description and category. " +
+        "Use this to discover relevant guides before fetching their full content with get_guide.",
+      inputSchema: {
+        query: z
+          .string()
+          .min(1)
+          .describe(
+            'Free-text search query. E.g.: "tweening", "physics constraints", "data store"',
+          ),
+      },
+    },
+    async ({ query }) => {
+      const results = await searchGuides(query, 10);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(results, null, 2),
+          },
+        ],
+      };
+    },
+  );
+
+  server.registerTool(
+    "get_guide",
+    {
+      title: "Get Roblox Creator Guide",
+      description:
+        "Fetches the full Markdown content of a single Roblox creator guide by its path. " +
+        "The path is the relative path returned by search_guides or list_guides " +
+        '(e.g.: "scripting/services/tween-service.md"). ' +
+        "Returns raw Markdown including frontmatter, prose and code samples.",
+      inputSchema: {
+        path: z
+          .string()
+          .min(1)
+          .describe(
+            "Relative guide path as returned by search_guides or list_guides. " +
+              'E.g.: "scripting/services/tween-service.md"',
+          ),
+      },
+    },
+    async ({ path }) => {
+      const result = await fetchGuide(path);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: result.markdown,
+          },
+        ],
+      };
+    },
+  );
+
+  server.registerTool(
+    "list_guides",
+    {
+      title: "List All Roblox Creator Guides",
+      description:
+        "Returns the full index of all Roblox creator guide paths and their categories. " +
+        "Title and description fields are populated lazily as guides are fetched — " +
+        "they may be empty on first call. Use search_guides for a faster filtered view.",
+      inputSchema: {},
+    },
+    async () => {
+      const entries = await fetchGuideIndex();
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(entries, null, 2),
           },
         ],
       };

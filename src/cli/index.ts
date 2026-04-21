@@ -1,16 +1,14 @@
+// src/cli/index.ts
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type {
+  CodeSample,
   InheritedGroup,
   OwnMembers,
   RichMember,
   RobloxDocEntry,
-  CodeSample,
 } from "../scraper/fetch.js";
-import {
-  findClosestApiName,
-  scrapeIndex,
-  scrapeTopic,
-} from "../scraper/index.js";
+import { fetchGuide, searchGuides } from "../scraper/guides.js";
+import { findClosestApiName, scrapeIndex, scrapeTopic } from "../scraper/index.js";
 import { createServer } from "../server/index.js";
 
 const W = 76;
@@ -104,20 +102,14 @@ function kindBadge(kind: string): string {
 function formatParam(p: unknown): string {
   const param = p as Record<string, unknown>;
   const name =
-    typeof param["Name"] === "string"
-      ? param["Name"]
-      : typeof param["name"] === "string"
-        ? param["name"]
-        : "?";
+    typeof param.Name === "string" ? param.Name : typeof param.name === "string" ? param.name : "?";
   const type =
-    typeof param["Type"] === "object" && param["Type"] !== null
-      ? (((param["Type"] as Record<string, unknown>)["Name"] as
-          | string
-          | undefined) ?? "unknown")
-      : typeof param["type"] === "string"
-        ? param["type"]
+    typeof param.Type === "object" && param.Type !== null
+      ? (((param.Type as Record<string, unknown>).Name as string | undefined) ?? "unknown")
+      : typeof param.type === "string"
+        ? param.type
         : "unknown";
-  const def = param["Default"] ?? param["default"];
+  const def = param.Default ?? param.default;
   const defStr = typeof def === "string" ? dim(` = ${def}`) : "";
   return `${c("white", name)}: ${c("yellow", type)}${defStr}`;
 }
@@ -139,9 +131,8 @@ function formatMember(m: RichMember, kind: string): string {
   if (m.type !== undefined) {
     const typeName =
       typeof m.type === "object" && m.type !== null
-        ? (((m.type as Record<string, unknown>)["Name"] as
-            | string
-            | undefined) ?? JSON.stringify(m.type))
+        ? (((m.type as Record<string, unknown>).Name as string | undefined) ??
+          JSON.stringify(m.type))
         : String(m.type);
     parts.push(`     ${dim("type:")} ${c("yellow", typeName)}`);
   }
@@ -155,12 +146,10 @@ function formatMember(m: RichMember, kind: string): string {
     const first = m.returns[0] as Record<string, unknown> | undefined;
     if (first !== undefined) {
       const retType =
-        typeof first["Type"] === "object" && first["Type"] !== null
-          ? (((first["Type"] as Record<string, unknown>)["Name"] as
-              | string
-              | undefined) ?? "unknown")
-          : typeof first["type"] === "string"
-            ? first["type"]
+        typeof first.Type === "object" && first.Type !== null
+          ? (((first.Type as Record<string, unknown>).Name as string | undefined) ?? "unknown")
+          : typeof first.type === "string"
+            ? first.type
             : "unknown";
       parts.push(`     ${dim("returns:")} ${c("green", retType)}`);
     }
@@ -172,11 +161,8 @@ function formatMember(m: RichMember, kind: string): string {
 
   return parts.join("\n");
 }
-function formatMemberGroup(
-  label: string,
-  kind: string,
-  members: RichMember[],
-): string {
+
+function formatMemberGroup(label: string, kind: string, members: RichMember[]): string {
   if (members.length === 0) return "";
   const lines: string[] = [section(label, members.length)];
   for (const m of members) {
@@ -199,12 +185,7 @@ function formatOwnMembers(own: OwnMembers): string {
 
 function formatInherited(groups: InheritedGroup[]): string {
   const nonEmpty = groups.filter(
-    (g) =>
-      g.properties.length +
-        g.methods.length +
-        g.events.length +
-        g.callbacks.length >
-      0,
+    (g) => g.properties.length + g.methods.length + g.events.length + g.callbacks.length > 0,
   );
   if (nonEmpty.length === 0) return "";
 
@@ -225,21 +206,17 @@ function formatCodeSample(s: CodeSample, index: number): string {
   const preview = codeLines.slice(0, 25);
   const truncated = codeLines.length > 25;
 
-  const lines: string[] = [
-    `\n  ${c("cyan", "◆")} ${bold(title)} ${dim(`(${s.language})`)}`,
-  ];
+  const lines: string[] = [`\n  ${c("cyan", "◆")} ${bold(title)} ${dim(`(${s.language})`)}`];
   if (s.description) lines.push(`  ${dim(truncate(s.description, W - 2))}`);
-  lines.push(`  ${c("gray", "┌" + "─".repeat(W - 4) + "┐")}`);
+  lines.push(`  ${c("gray", `┌${"─".repeat(W - 4)}┐`)}`);
   for (const line of preview) {
     const padded = line.length > W - 6 ? `${line.slice(0, W - 9)}…` : line;
     lines.push(`  ${c("gray", "│")} ${c("green", padded)}`);
   }
   if (truncated) {
-    lines.push(
-      `  ${c("gray", "│")} ${dim(`… ${codeLines.length - 25} more lines`)}`,
-    );
+    lines.push(`  ${c("gray", "│")} ${dim(`… ${codeLines.length - 25} more lines`)}`);
   }
-  lines.push(`  ${c("gray", "└" + "─".repeat(W - 4) + "┘")}`);
+  lines.push(`  ${c("gray", `└${"─".repeat(W - 4)}┘`)}`);
   return lines.join("\n");
 }
 
@@ -250,20 +227,13 @@ function formatEntry(entry: RobloxDocEntry): string {
   parts.push(boxTop(`CLASS: ${cl.name}${depFlag}`, "cyan"));
 
   if (cl.inherits.length > 0) {
-    parts.push(
-      boxRow(`Inherits: ${c("yellow", cl.inherits.join(", "))}`, "cyan"),
-    );
+    parts.push(boxRow(`Inherits: ${c("yellow", cl.inherits.join(", "))}`, "cyan"));
   } else {
     parts.push(boxRow(dim("No superclass"), "cyan"));
   }
 
   if (cl.descendants.length > 0) {
-    parts.push(
-      boxRow(
-        `Descendants: ${dim(truncate(cl.descendants.join(", "), W - 16))}`,
-        "cyan",
-      ),
-    );
+    parts.push(boxRow(`Descendants: ${dim(truncate(cl.descendants.join(", "), W - 16))}`, "cyan"));
   }
 
   if (cl.tags.length > 0) {
@@ -277,12 +247,7 @@ function formatEntry(entry: RobloxDocEntry): string {
     cl.ownMembers.callbacks.length;
 
   const totalInherited = entry.inheritedMembers.reduce(
-    (acc, g) =>
-      acc +
-      g.properties.length +
-      g.methods.length +
-      g.events.length +
-      g.callbacks.length,
+    (acc, g) => acc + g.properties.length + g.methods.length + g.events.length + g.callbacks.length,
     0,
   );
 
@@ -323,14 +288,70 @@ function formatEntry(entry: RobloxDocEntry): string {
   return parts.join("\n");
 }
 
+// ! Guide formatters
+
+function formatGuideSearch(results: Awaited<ReturnType<typeof searchGuides>>): string {
+  if (results.length === 0) {
+    return `\n${c("yellow", "✖")} No guides found.\n`;
+  }
+
+  const lines: string[] = [
+    "",
+    `${bold(c("cyan", "GUIDES"))} ${dim(`(${results.length} results)`)}`,
+    c("gray", HR),
+  ];
+
+  for (const r of results) {
+    lines.push(`  ${bold(c("green", r.path))}`);
+    if (r.title) lines.push(`  ${c("white", r.title)}`);
+    if (r.description) lines.push(`  ${dim(truncate(r.description, W - 2))}`);
+    lines.push(`  ${dim(`category: ${r.category}`)}`);
+    lines.push(c("gray", `  ${HR_THIN}`));
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
+function formatGuideContent(path: string, markdown: string): string {
+  const lines: string[] = [];
+  lines.push(boxTop(`GUIDE: ${path}`, "green"));
+  lines.push(boxBottom("green"));
+  lines.push("");
+
+  const mdLines = markdown.split("\n");
+  const preview = mdLines.slice(0, 60);
+  const truncated = mdLines.length > 60;
+
+  for (const line of preview) {
+    if (line.startsWith("# ")) {
+      lines.push(bold(c("cyan", line)));
+    } else if (line.startsWith("## ")) {
+      lines.push(c("yellow", line));
+    } else if (line.startsWith("### ")) {
+      lines.push(c("green", line));
+    } else if (line.startsWith("```")) {
+      lines.push(c("gray", line));
+    } else {
+      lines.push(line);
+    }
+  }
+
+  if (truncated) {
+    lines.push("");
+    lines.push(dim(`… ${mdLines.length - 60} more lines (use get_guide tool for full content)`));
+  }
+
+  lines.push(`\n${c("gray", HR)}\n`);
+  return lines.join("\n");
+}
+
 // ! Help
 
 function printHelp(): void {
   process.stdout.write(
     [
       "",
-      bold(c("cyan", "rodocsmcp")) +
-        dim(" — Roblox Creator Hub API reference & MCP server"),
+      bold(c("cyan", "rodocsmcp")) + dim(" — Roblox Creator Hub API reference & MCP server"),
       "",
       bold("USAGE"),
       `  ${c("green", "rodocsmcp")}                    Start MCP server ${dim("(stdio)")}`,
@@ -338,6 +359,8 @@ function printHelp(): void {
       `  ${c("green", "rodocsmcp")} ${c("yellow", "<TopicName>")}         Print docs for a topic`,
       `  ${c("green", "rodocsmcp")} ${c("yellow", "--list")}              List all class and enum names`,
       `  ${c("green", "rodocsmcp")} ${c("yellow", "--find <query>")}      Find closest API name`,
+      `  ${c("green", "rodocsmcp")} ${c("yellow", "--guide <path>")}      Fetch a guide by path`,
+      `  ${c("green", "rodocsmcp")} ${c("yellow", "--search-guide <q>")}  Search guides by keyword`,
       `  ${c("green", "rodocsmcp")} ${c("yellow", "--help")} ${dim("| -h")}          Show this help`,
       "",
       bold("EXAMPLES"),
@@ -346,6 +369,8 @@ function printHelp(): void {
       `  ${dim("$")} rodocsmcp KeyCode`,
       `  ${dim("$")} rodocsmcp --list`,
       `  ${dim("$")} rodocsmcp --find tweenserv`,
+      `  ${dim("$")} rodocsmcp --search-guide "data store"`,
+      `  ${dim("$")} rodocsmcp --guide scripting/data/data-stores.md`,
       "",
     ].join("\n"),
   );
@@ -364,15 +389,13 @@ async function runTopicCli(topic: string): Promise<void> {
   process.stderr.write(`${dim(`Fetching "${topic}"...`)}\n`);
   try {
     const result = await scrapeTopic(topic);
-    process.stdout.write(formatEntry(result.entry) + "\n");
+    process.stdout.write(`${formatEntry(result.entry)}\n`);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     const suggestion = await findClosestApiName(topic).catch(() => null);
     process.stderr.write(`${c("red", "✖")} ${message}\n`);
     if (suggestion !== null) {
-      process.stderr.write(
-        `${c("yellow", "?")} Did you mean: ${bold(c("cyan", suggestion))}?\n`,
-      );
+      process.stderr.write(`${c("yellow", "?")} Did you mean: ${bold(c("cyan", suggestion))}?\n`);
     }
     process.exit(1);
   }
@@ -394,20 +417,34 @@ async function runListCli(): Promise<void> {
     "",
   ];
 
-  process.stdout.write(lines.join("\n") + "\n");
+  process.stdout.write(`${lines.join("\n")}\n`);
 }
 
 async function runFindCli(query: string): Promise<void> {
   process.stderr.write(`${dim(`Searching for "${query}"...`)}\n`);
   const match = await findClosestApiName(query);
   if (match !== null) {
-    process.stdout.write(
-      `${c("green", "✔")} Closest match: ${bold(c("cyan", match))}\n`,
-    );
+    process.stdout.write(`${c("green", "✔")} Closest match: ${bold(c("cyan", match))}\n`);
   } else {
-    process.stdout.write(
-      `${c("yellow", "✖")} No match found for "${query}".\n`,
-    );
+    process.stdout.write(`${c("yellow", "✖")} No match found for "${query}".\n`);
+  }
+}
+
+async function runGuideSearchCli(query: string): Promise<void> {
+  process.stderr.write(`${dim(`Searching guides for "${query}"...`)}\n`);
+  const results = await searchGuides(query);
+  process.stdout.write(formatGuideSearch(results));
+}
+
+async function runGuideCli(path: string): Promise<void> {
+  process.stderr.write(`${dim(`Fetching guide "${path}"...`)}\n`);
+  try {
+    const result = await fetchGuide(path);
+    process.stdout.write(formatGuideContent(result.path, result.markdown));
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`${c("red", "✖")} ${message}\n`);
+    process.exit(1);
   }
 }
 
@@ -436,16 +473,36 @@ async function main(): Promise<void> {
   if (first === "--find") {
     const query = args[1];
     if (query === undefined || query.trim() === "") {
-      process.stderr.write(
-        `${c("red", "✖")} --find requires a query argument.\n`,
-      );
+      process.stderr.write(`${c("red", "✖")} --find requires a query argument.\n`);
       process.exit(1);
     }
     await runFindCli(query);
     return;
   }
 
-  await runTopicCli(first as string);
+  if (first === "--search-guide") {
+    const query = args[1];
+    if (query === undefined || query.trim() === "") {
+      process.stderr.write(`${c("red", "✖")} --search-guide requires a query argument.\n`);
+      process.exit(1);
+    }
+    await runGuideSearchCli(query);
+    return;
+  }
+
+  if (first === "--guide") {
+    const path = args[1];
+    if (path === undefined || path.trim() === "") {
+      process.stderr.write(`${c("red", "✖")} --guide requires a path argument.\n`);
+      process.exit(1);
+    }
+    await runGuideCli(path);
+    return;
+  }
+
+  if (first !== undefined) {
+    await runTopicCli(first);
+  }
 }
 
 main().catch((err: unknown) => {
