@@ -1,23 +1,39 @@
 {
   "name": "rodocsmcp",
-  "version": "1.0.0",
-  "description": "Typed scraper and MCP server for the Roblox Creator Hub API Reference.",
-  "author": "iamthebestts",
+  "version": "1.1.0",
+  "description": "Typed scraper and MCP server for Roblox Creator Hub API Reference and Guides.",
   "license": "MIT",
+  "author": "iamthebestts",
+  "keywords": [
+    "roblox",
+    "creator-hub",
+    "mcp",
+    "api",
+    "guides",
+    "scraper",
+    "typescript"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/iamthebestts/RoDocs-MCP.git"
+  },
+  "homepage": "https://github.com/iamthebestts/RoDocs-MCP",
+  "bugs": {
+    "url": "https://github.com/iamthebestts/RoDocs-MCP/issues"
+  },
   "type": "module",
   "main": "./dist/index.cjs",
-  "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "bin": {
-    "rodocsmcp": "./dist/cli.js",
-    "rodocs": "./dist/cli.js"
-  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
     }
+  },
+  "bin": {
+    "rodocsmcp": "./dist/cli.js",
+    "rodocs": "./dist/cli.js"
   },
   "files": [
     "dist",
@@ -26,22 +42,27 @@
   ],
   "scripts": {
     "dev": "tsx src/cli/index.ts",
-    "dev:actor": "tsx src/cli/index.ts Actor",
     "dev:list": "tsx src/cli/index.ts --list",
     "dev:mcp": "tsx src/cli/index.ts --stdio",
     "build": "tsup",
+    "clean": "rm -rf dist",
     "start": "node dist/cli.js",
     "start:mcp": "node dist/cli.js --stdio",
     "check": "biome check .",
     "check:fix": "biome check --write .",
     "typecheck": "tsc --noEmit",
-    "ci": "biome ci . && tsc --noEmit",
-    "clean": "rm -rf dist",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e:server": "cross-env E2E=true vitest run tests/server.e2e.test.ts --reporter=verbose",
+    "test:e2e:cli": "cross-env E2E=true vitest run tests/cli.e2e.test.ts --reporter=verbose",
+    "test:e2e": "cross-env E2E=true vitest run tests/ --reporter=verbose",
+    "ci": "biome ci . && vitest run && tsc --noEmit",
     "prepublishOnly": "pnpm run ci && pnpm run build"
   },
   "engines": {
-    "node": ">=20.0.0",
-    "pnpm": ">=10.0.0"
+    "node": ">=20.10.0",
+    "pnpm": ">=10"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -52,10 +73,13 @@
   "devDependencies": {
     "@biomejs/biome": "^2.4.12",
     "@types/node": "^25.6.0",
+    "@vitest/coverage-v8": "^4.1.4",
+    "cross-env": "^10.1.0",
     "domhandler": "*",
     "tsup": "^8.5.1",
     "tsx": "^4.21.0",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.4"
   },
   "packageManager": "pnpm@10.29.1"
 }
