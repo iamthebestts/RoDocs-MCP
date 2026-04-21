@@ -23,7 +23,7 @@ console.log(result.entry.class.summary);
 ---
 
 ## `scrapeMany`
-Fetches up to 20 topics in parallel. Never rejects — failures become `ScrapeError`.
+Fetches up to 20 topics in parallel. Never rejects - failures become `ScrapeError`.
 
 **Signature**
 ```ts
@@ -67,7 +67,7 @@ console.log(`Total classes: ${index.classes.length}`);
 ---
 
 ## `findClosestApiName`
-Fuzzy-matches a query against all known API names. Returns null if nothing found.
+BM25-searches a query against all known API names and resolves common aliases. Returns null if nothing found.
 
 **Signature**
 ```ts

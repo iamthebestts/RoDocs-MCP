@@ -68,8 +68,8 @@ Returns a flat list of all Roblox class names and enum names.
 }
 ```
 
-## `find_api_name`
-Fuzzy-searches all known class and enum names for the closest match to a query.
+## `find_closest_api_name`
+BM25-searches all known class and enum names for the closest match to a query. Resolves common aliases (e.g., 'datastore').
 
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
@@ -81,4 +81,54 @@ Fuzzy-searches all known class and enum names for the closest match to a query.
   "found": true,
   "match": "TweenService"
 }
+```
+
+## `search_guides`
+BM25-searches the Roblox creator-docs repository for guides, tutorials and documentation pages matching a free-text query.
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `query` | `string` | Yes | Free-text search query. E.g.: "tweening", "physics constraints". |
+
+**Example Response**
+```json
+[
+  {
+    "name": "scripting/services/tween-service.md",
+    "title": "TweenService",
+    "description": "Learn how to use TweenService to animate objects...",
+    "category": "scripting",
+    "score": 12.5
+  }
+]
+```
+
+## `get_guide`
+Fetches the full Markdown content of a single Roblox creator guide by its relative path.
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `path` | `string` | Yes | Relative guide path returned by `search_guides` or `list_guides`. |
+
+**Example Response**
+```markdown
+# TweenService
+TweenService is used to interpolate...
+```
+
+## `list_guides`
+Returns the full index of all Roblox creator guide paths and their categories.
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| N/A | N/A | No | No input required. |
+
+**Example Response**
+```json
+[
+  {
+    "path": "scripting/services/tween-service.md",
+    "category": "scripting"
+  }
+]
 ```
