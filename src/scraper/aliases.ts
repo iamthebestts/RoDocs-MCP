@@ -147,3 +147,25 @@ export function resolveAliases(query: string): readonly string[] {
   const lower = query.toLowerCase().trim();
   return NORMALIZED.get(lower) ?? [];
 }
+
+// ! Luau synonyms
+
+const LUAU_SYNONYMS: ReadonlyMap<string, string | null> = new Map<string, string | null>([
+  ["task.wait", "task"],
+  ["task.delay", "task"],
+  [":waitforchild", "Instance"],
+  [":findfirstchild", "Instance"],
+  [":connect", "RBXScriptSignal"],
+  ["game:getservice", null], // pass-through: return query unchanged
+]);
+
+/**
+ * Replaces common Luau syntax with the canonical API name.
+ * "game:getservice" is pass-through — returns the original query.
+ */
+export function resolveLuauSynonyms(query: string): string {
+  const lower = query.toLowerCase().trim();
+  const entry = LUAU_SYNONYMS.get(lower);
+  if (entry === undefined || entry === null) return query;
+  return entry;
+}
