@@ -23,6 +23,19 @@ Provides MCP-compatible AI assistants with structured access to Roblox API + Cre
 }
 ```
 
+If you need higher GitHub API limits or access to authenticated raw/content fetches, pass a GitHub PAT with `--github-token` or expose it through `GITHUB_TOKEN`.
+
+```json
+{
+  "mcpServers": {
+    "rodocs": {
+      "command": "npx",
+      "args": ["-y", "rodocsmcp", "--stdio", "--github-token", "YOUR_GITHUB_PAT"]
+    }
+  }
+}
+```
+
 ---
 
 ## MCP Tools
@@ -36,6 +49,9 @@ Provides MCP-compatible AI assistants with structured access to Roblox API + Cre
 | `search_guides`           | Search Creator Guides    |
 | `get_guide`               | Fetch guide content      |
 | `list_guides`             | List available guides    |
+| `get_code_samples`        | Fetch code samples only  |
+| `compare_api_members`     | Compare topic members    |
+| `get_api_changelog`       | Inspect deprecations     |
 
 ---
 
@@ -48,7 +64,8 @@ npx rodocsmcp TweenService
 npx rodocsmcp --list
 npx rodocsmcp --find tweenserv
 npx rodocsmcp --search-guide "data store"
-npx rodocsmcp --guide docs/scripting/data-stores.md
+npx rodocsmcp --guide scripting/data/data-stores.md
+npx rodocsmcp --github-token "$GITHUB_TOKEN" TweenService
 npx rodocsmcp --stdio
 ```
 
@@ -61,7 +78,17 @@ npx rodocsmcp --stdio
 | `--find <query>`         | Resolve API name |
 | `--search-guide <query>` | Search guides    |
 | `--guide <path>`         | Fetch guide      |
+| `--github-token <token>` | Authenticate GitHub requests |
 | `--stdio`                | Start MCP server |
+
+### Authentication
+
+GitHub-backed fetches accept either:
+
+- the `--github-token <token>` CLI flag
+- the `GITHUB_TOKEN` environment variable
+
+The explicit CLI flag takes precedence over `GITHUB_TOKEN`.
 
 ---
 
@@ -126,7 +153,7 @@ pnpm test
 
 - **API Reference**: Extracted from `__NEXT_DATA__` on Creator Hub (no DOM scraping)
 - **Guides**: Fetched and indexed from Creator Hub docs
-- **Search**: BM25 ranking with alias normalization
+- **Search**: BM25 ranking with alias normalization and Luau synonym resolution
 - **Cache**: In-memory TTL (10 min)
 
 ---

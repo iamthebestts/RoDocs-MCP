@@ -8,11 +8,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com), and this 
 
 ### Planned
 
-- Phase 2: Guide/Article scraping for tutorials, concepts, and how-to docs.
-  - Categories: `/docs/scripting/*`, `/docs/luau/*`, `/docs/characters/*`, `/docs/players/*`, `/docs/input/*`, `/docs/ui/*`, `/docs/animation/*`, `/docs/cloud-services/*`, `/docs/performance-optimization/*`.
-  - 3 new MCP tools: `search_guides`, `get_guide`, `list_guide_categories`.
-  - CLI flags: `--guide <slug>`, `--search-guide <query>`.
-  - New types: `RobloxGuide`, `GuideSection`, `GuideSearchResult`.
+- Migrate API docs scraping to a faster, more performant approach using the `creator-docs` GitHub repository directly.
+
+## [0.2.0] - 2026-04-25
+
+### Added
+
+- GitHub PAT authentication support for GitHub-backed requests through the new `--github-token` CLI flag.
+- Support for `GITHUB_TOKEN` as a fallback when no explicit GitHub token is provided.
+
+### Changed
+
+- CLI and MCP server flows now propagate the configured GitHub token to API dump and Creator Docs fetches.
+- API and guide search behavior now includes stronger alias and Luau synonym resolution for common Roblox queries.
+- Search-related public TypeScript types now expose richer API and guide result metadata.
+
+### Documentation
+
+- Updated CLI and MCP docs to describe GitHub-authenticated usage and the current guide tooling.
+
+### Tests
+
+- Added coverage for GitHub token parsing, token propagation, and authenticated fetch behavior across CLI, server, and scraper layers.
+- Expanded e2e coverage for guide lookup flows and MCP tool behavior.
 
 ## [1.0.0] - 2026-04-20
 

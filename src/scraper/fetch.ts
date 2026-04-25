@@ -1,4 +1,7 @@
 import axios from "axios";
+import { buildGithubHeaders } from "../utils/github-token.js";
+
+// ! Flat types
 
 export interface CodeSample {
   identifier: string;
@@ -11,20 +14,15 @@ export interface CodeSample {
 export interface RichMember {
   name: string;
   summary: string;
-  description: string;
-  codeSamples: CodeSample[];
-  type?: unknown;
-  category?: string;
-  serialization?: { canLoad: boolean; canSave: boolean };
-  parameters?: unknown[];
-  returns?: unknown[];
+  type?: string;
+  parameters?: Array<{ name: string; type: string; default?: string }>;
+  returns?: string;
   tags: string[];
   deprecationMessage: string;
   isDeprecated: boolean;
   inheritedFrom: string;
   threadSafety: string | null;
-  security: unknown | null;
-  capabilities: unknown[];
+  security: string | null;
 }
 
 export interface OwnMembers {
@@ -55,8 +53,53 @@ export interface RobloxDocEntry {
     ownMembers: OwnMembers;
   };
   inheritedMembers: InheritedGroup[];
-  fullApiReference: OwnMembers;
 }
+
+// ! Internal flatten helpers (applied at enrichment time)
+
+function flattenType(raw: unknown): string {
+  if (typeof raw === "string") return raw;
+  if (raw !== null && typeof raw === "object") {
+    const obj = raw as Record<string, unknown>;
+    if (typeof obj.Name === "string") return obj.Name;
+    if (typeof obj.name === "string") return obj.name;
+  }
+  return "unknown";
+}
+
+function flattenParams(raw: unknown[]): Array<{ name: string; type: string; default?: string }> {
+  return raw.map((p) => {
+    const param = p as Record<string, unknown>;
+    const typeRaw = param.Type ?? param.type;
+    const entry: { name: string; type: string; default?: string } = {
+      name:
+        typeof param.Name === "string"
+          ? param.Name
+          : typeof param.name === "string"
+            ? param.name
+            : "",
+      type: flattenType(typeRaw),
+    };
+    const def = param.Default ?? param.default;
+    if (typeof def === "string") entry.default = def;
+    return entry;
+  });
+}
+
+function flattenReturns(raw: unknown[]): string | undefined {
+  if (raw.length === 0) return undefined;
+  const first = raw[0] as Record<string, unknown> | undefined;
+  if (first === undefined) return undefined;
+  const typeRaw = first.Type ?? first.type ?? first;
+  const result = flattenType(typeRaw);
+  return result === "unknown" ? undefined : result;
+}
+
+function cleanText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+// ! Raw API dump
 
 interface RawTag {
   Name: string;
@@ -75,22 +118,35 @@ const http = axios.create({
   },
 });
 
-// ! Mini-API-Dump (index only)
-
 const DUMP_URL =
   "https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/roblox/Mini-API-Dump.json";
 
 let cachedDump: RawApiDump | null = null;
+let engineVersionHash = "default";
 
-async function loadApiDump(): Promise<RawApiDump> {
+async function loadApiDump(githubToken?: string): Promise<RawApiDump> {
   if (cachedDump !== null) return cachedDump;
   try {
-    const { data } = await http.get<RawApiDump>(DUMP_URL);
-    cachedDump = data;
-    return data;
+    const response = await http.get<RawApiDump>(DUMP_URL, {
+      headers: buildGithubHeaders({}, githubToken),
+    });
+    cachedDump = response.data;
+    const etag = response.headers.etag;
+    const lastModified = response.headers["last-modified"];
+    const rawHash =
+      (typeof etag === "string" ? etag : undefined) ??
+      (typeof lastModified === "string" ? lastModified : undefined) ??
+      "default";
+    engineVersionHash = rawHash;
+    return response.data;
   } catch (err: unknown) {
     throw new Error(`Failed to load API dump: ${err instanceof Error ? err.message : String(err)}`);
   }
+}
+
+/** Returns ETag/Last-Modified from the Mini-API-Dump, fetched once and kept in memory. */
+export function getEngineVersionHash(): string {
+  return engineVersionHash;
 }
 
 // ! Creator Hub scraper
@@ -125,18 +181,13 @@ interface RawCodeSample {
 interface RawMember {
   name?: string;
   summary?: string;
-  description?: string;
-  codeSamples?: RawCodeSample[];
   type?: unknown;
-  category?: string;
-  serialization?: { canLoad: boolean; canSave: boolean };
   parameters?: unknown[];
   returns?: unknown[];
   tags?: string[];
   deprecationMessage?: string;
   threadSafety?: string;
   security?: unknown;
-  capabilities?: unknown[];
 }
 
 interface NextDataShape {
@@ -216,35 +267,11 @@ function buildDocObject(apiRef: RawApiRef, parents: RawApiRef[]): RobloxDocEntry
     };
   });
 
-  const seen = new Set<string>();
-  const fullApiReference: OwnMembers = {
-    properties: [],
-    methods: [],
-    events: [],
-    callbacks: [],
-  };
-
-  const mergeGroup = (key: keyof OwnMembers, source: OwnMembers | InheritedGroup) => {
-    for (const member of source[key]) {
-      if (!seen.has(member.name)) {
-        seen.add(member.name);
-        (fullApiReference[key] as RichMember[]).push(member);
-      }
-    }
-  };
-
-  for (const key of ["properties", "methods", "events", "callbacks"] as const) {
-    mergeGroup(key, ownMembers);
-    for (const group of inheritedMembers) {
-      mergeGroup(key, group);
-    }
-  }
-
   return {
     class: {
       name: targetName,
-      summary: apiRef.summary ?? "",
-      description: apiRef.description ?? "",
+      summary: cleanText(apiRef.summary ?? ""),
+      description: cleanText(apiRef.description ?? ""),
       inherits: apiRef.inherits ?? [],
       descendants: apiRef.descendants ?? [],
       tags: apiRef.tags ?? [],
@@ -253,7 +280,6 @@ function buildDocObject(apiRef: RawApiRef, parents: RawApiRef[]): RobloxDocEntry
       ownMembers,
     },
     inheritedMembers,
-    fullApiReference,
   };
 }
 
@@ -263,26 +289,33 @@ function enrichMember(raw: RawMember, inheritedFrom: string): RichMember {
   const tags = raw.tags ?? [];
   const deprecationMessage = raw.deprecationMessage ?? "";
 
+  const rawSec = raw.security ?? null;
+  const secStr = rawSec !== null ? flattenType(rawSec) : null;
+
   const member: RichMember = {
     name: raw.name ?? "",
-    summary: raw.summary ?? "",
-    description: raw.description ?? "",
-    codeSamples: (raw.codeSamples ?? []).map(enrichCodeSample),
+    summary: cleanText(raw.summary ?? ""),
     tags,
     deprecationMessage,
     isDeprecated: tags.includes("Deprecated") || deprecationMessage.length > 0,
     inheritedFrom,
     threadSafety: raw.threadSafety ?? null,
-    security: raw.security ?? null,
-    capabilities: raw.capabilities ?? [],
+    security: secStr === "unknown" ? null : secStr,
   };
 
-  if (raw.type !== undefined) member.type = raw.type;
-  if (raw.category !== undefined) member.category = raw.category;
-  if (raw.serialization !== undefined) member.serialization = raw.serialization;
+  if (raw.type !== undefined) {
+    const typeStr = flattenType(raw.type);
+    if (typeStr !== "unknown") member.type = typeStr;
+  }
 
-  if (raw.parameters !== undefined) member.parameters = raw.parameters;
-  if (raw.returns !== undefined) member.returns = raw.returns;
+  if (raw.parameters !== undefined && raw.parameters.length > 0) {
+    member.parameters = flattenParams(raw.parameters);
+  }
+
+  if (raw.returns !== undefined && raw.returns.length > 0) {
+    const ret = flattenReturns(raw.returns);
+    if (ret !== undefined) member.returns = ret;
+  }
 
   return member;
 }
@@ -327,11 +360,11 @@ export async function fetchTopic(topic: string): Promise<RobloxDocEntry> {
   );
 }
 
-export async function fetchIndex(): Promise<{
+export async function fetchIndex(githubToken?: string): Promise<{
   classes: string[];
   enums: string[];
 }> {
-  const dump = await loadApiDump();
+  const dump = await loadApiDump(githubToken);
 
   const classes = (dump.Classes ?? [])
     .map((c) => c.Name)

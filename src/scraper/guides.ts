@@ -1,4 +1,6 @@
 import axios from "axios";
+import { buildGithubHeaders } from "../utils/github-token.js";
+import { resolveLuauSynonyms } from "./aliases.js";
 import { MemoryCache } from "./cache.js";
 
 export interface GuideMetadata {
@@ -71,14 +73,16 @@ function hydrateFrontmatter(path: string, markdown: string): void {
   entry.description = description;
 }
 
-export async function fetchGuideIndex(): Promise<GuideMetadata[]> {
+export async function fetchGuideIndex(githubToken?: string): Promise<GuideMetadata[]> {
   const now = Date.now();
 
   if (indexSnapshot !== null && now - indexSnapshot.fetchedAt < INDEX_TTL_MS) {
     return indexSnapshot.entries;
   }
 
-  const { data } = await http.get<TreeResponse>(TREE_URL);
+  const { data } = await http.get<TreeResponse>(TREE_URL, {
+    headers: buildGithubHeaders({}, githubToken),
+  });
   const tree = data.tree ?? [];
 
   const entries: GuideMetadata[] = tree
@@ -100,9 +104,12 @@ export async function fetchGuideIndex(): Promise<GuideMetadata[]> {
   return entries;
 }
 
-export async function searchGuides(query: string): Promise<GuideMetadata[]> {
-  const entries = await fetchGuideIndex();
-  const tokens = query
+export async function searchGuides(query: string, githubToken?: string): Promise<GuideMetadata[]> {
+  const entries = await fetchGuideIndex(githubToken);
+
+  const resolvedQuery = resolveLuauSynonyms(query);
+
+  const tokens = resolvedQuery
     .toLowerCase()
     .split(/\s+/)
     .filter((t) => t.length > 0);
@@ -125,13 +132,13 @@ export async function searchGuides(query: string): Promise<GuideMetadata[]> {
     .map(({ entry }) => entry);
 }
 
-export async function fetchGuide(path: string): Promise<GuideResult> {
+export async function fetchGuide(path: string, githubToken?: string): Promise<GuideResult> {
   const cached = guideCache.get(path);
   if (cached !== undefined) return cached;
 
   const url = `${RAW_BASE}${path}`;
   const { data: markdown } = await http.get<string>(url, {
-    headers: { Accept: "text/plain" },
+    headers: buildGithubHeaders({ Accept: "text/plain" }, githubToken),
   });
 
   const result: GuideResult = { path, markdown };

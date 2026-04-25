@@ -4,6 +4,9 @@ import type { RichMember, RobloxDocEntry } from "../scraper/fetch.js";
 import { fetchGuide, fetchGuideIndex } from "../scraper/guides.js";
 import { scrapeIndex, scrapeMany, scrapeTopic } from "../scraper/index.js";
 import { search, searchGuides, warmUp } from "../scraper/search.js";
+import { parseGithubTokenArgs, resolveGithubToken } from "../utils/github-token.js";
+
+// ! AI projection types
 
 interface AIMember {
   name: string;
@@ -30,49 +33,21 @@ interface AIEntry {
   codeSamples: Array<{ title: string; language: string; code: string }>;
 }
 
+// ! Shared constants
+
+const MEMBER_KEYS = ["properties", "methods", "events", "callbacks"] as const;
+type MemberKey = (typeof MEMBER_KEYS)[number];
+
+const KIND_LABELS: Record<MemberKey, AIMember["kind"]> = {
+  properties: "property",
+  methods: "method",
+  events: "event",
+  callbacks: "callback",
+};
+
+const NOTABLE_TAGS = new Set(["ReadOnly", "Hidden", "NotReplicated"]);
+
 // ! Projection helpers
-
-function flattenType(raw: unknown): string {
-  if (typeof raw === "string") return raw;
-  if (raw !== null && typeof raw === "object") {
-    const obj = raw as Record<string, unknown>;
-    if (typeof obj.Name === "string") return obj.Name;
-    if (typeof obj.name === "string") return obj.name;
-  }
-  return "unknown";
-}
-
-function flattenParams(raw: unknown[] | undefined): AIMember["parameters"] | undefined {
-  if (raw === undefined || raw.length === 0) return undefined;
-  return raw.map((p) => {
-    const param = p as Record<string, unknown>;
-    const typeRaw = param.Type ?? param.type;
-    const entry: { name: string; type: string; default?: string } = {
-      name:
-        typeof param.Name === "string"
-          ? param.Name
-          : typeof param.name === "string"
-            ? param.name
-            : "",
-      type: flattenType(typeRaw),
-    };
-    const def = param.Default ?? param.default;
-    if (typeof def === "string") entry.default = def;
-    return entry;
-  });
-}
-
-function flattenReturns(raw: unknown[] | undefined): string | undefined {
-  if (raw === undefined || raw.length === 0) return undefined;
-  const first = raw[0] as Record<string, unknown> | undefined;
-  if (first === undefined) return undefined;
-  const typeRaw = first.Type ?? first.type ?? first;
-  return flattenType(typeRaw);
-}
-
-function cleanText(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
-}
 
 function projectMember(
   m: RichMember,
@@ -83,32 +58,27 @@ function projectMember(
   const member: AIMember = {
     name: m.name,
     kind,
-    summary: cleanText(m.summary || m.description),
+    summary: m.summary,
     deprecated: m.isDeprecated,
     inherited,
-    threadSafety: m.threadSafety ?? null,
+    threadSafety: m.threadSafety,
   };
 
-  if (inheritedFrom !== undefined) member.inheritedFrom = inheritedFrom;
+  // Set inheritedFrom only when the member is actually inherited
+  if (inherited && inheritedFrom !== undefined) member.inheritedFrom = inheritedFrom;
 
-  const type = flattenType(m.type);
-  if (type !== "unknown") member.type = type;
+  if (m.type !== undefined) member.type = m.type;
+  if (m.parameters !== undefined && m.parameters.length > 0) member.parameters = m.parameters;
+  if (m.returns !== undefined) member.returns = m.returns;
 
-  const params = flattenParams(m.parameters);
-  if (params !== undefined) member.parameters = params;
-
-  const returns = flattenReturns(m.returns);
-  if (returns !== undefined) member.returns = returns;
-
-  if (m.security !== null && m.security !== undefined) {
-    const sec = flattenType(m.security);
-    if (sec !== "unknown" && sec !== "None") member.security = sec;
+  if (m.security !== null && m.security !== "None") {
+    member.security = m.security;
   }
 
   return member;
 }
 
-function projectForAI(entry: RobloxDocEntry): AIEntry {
+function projectForAI(entry: RobloxDocEntry, includeInherited = false): AIEntry {
   const cl = entry.class;
 
   const ownMembers: AIMember[] = [
@@ -118,17 +88,19 @@ function projectForAI(entry: RobloxDocEntry): AIEntry {
     ...cl.ownMembers.callbacks.map((m) => projectMember(m, "callback", false)),
   ];
 
-  const inheritedMembers: AIMember[] = entry.inheritedMembers.flatMap((group) => [
-    ...group.properties.map((m) => projectMember(m, "property", true, group.fromClass)),
-    ...group.methods.map((m) => projectMember(m, "method", true, group.fromClass)),
-    ...group.events.map((m) => projectMember(m, "event", true, group.fromClass)),
-    ...group.callbacks.map((m) => projectMember(m, "callback", true, group.fromClass)),
-  ]);
+  const inheritedMembers: AIMember[] = includeInherited
+    ? entry.inheritedMembers.flatMap((group) => [
+        ...group.properties.map((m) => projectMember(m, "property", true, group.fromClass)),
+        ...group.methods.map((m) => projectMember(m, "method", true, group.fromClass)),
+        ...group.events.map((m) => projectMember(m, "event", true, group.fromClass)),
+        ...group.callbacks.map((m) => projectMember(m, "callback", true, group.fromClass)),
+      ])
+    : [];
 
   const result: AIEntry = {
     name: cl.name,
     kind: "class",
-    summary: cleanText(cl.summary || cl.description),
+    summary: cl.summary || cl.description,
     inherits: cl.inherits,
     deprecated: cl.deprecationMessage.length > 0 || cl.tags.includes("Deprecated"),
     members: [...ownMembers, ...inheritedMembers],
@@ -144,26 +116,51 @@ function projectForAI(entry: RobloxDocEntry): AIEntry {
   return result;
 }
 
+// ! Prompt text
+
+const ROBLOX_DEV_ASSISTANT_PROMPT =
+  `You are a Roblox Luau development assistant with access to the RoDocs MCP tools.\n\n` +
+  `Follow this workflow for every API lookup:\n` +
+  `1. If the API name is uncertain or approximate, always call find_api_name first to get the exact spelling.\n` +
+  `2. Call get_api_reference with the exact name. Use includeInherited=true only when the user explicitly asks about inherited behavior or parent classes.\n` +
+  `3. If the user asks for code examples, prefer get_code_samples over get_api_reference to save context.\n` +
+  `4. If asked to compare APIs, use compare_api_members.\n` +
+  `5. Before suggesting any method or property, check get_api_changelog to avoid deprecated members.\n` +
+  `6. For conceptual or tutorial questions, use search_guides then get_guide.\n\n` +
+  `Never guess API names. Never suggest deprecated members without warning.`;
+
 // ! Server
 
-export function createServer(): McpServer {
+export interface CreateServerOptions {
+  githubToken?: string;
+}
+
+function resolveServerGithubToken(options: CreateServerOptions): string | undefined {
+  if (options.githubToken !== undefined) {
+    return resolveGithubToken(options.githubToken);
+  }
+
+  return parseGithubTokenArgs(process.argv.slice(2)).githubToken;
+}
+
+export function createServer(options: CreateServerOptions = {}): McpServer {
+  const githubToken = resolveServerGithubToken(options);
   const server = new McpServer({
     name: "rodocsmcp",
     version: "1.0.0",
   });
 
-  // Warm up search indices in the background on server start
-  warmUp();
+  warmUp(githubToken);
 
   server.registerTool(
     "get_api_reference",
     {
       title: "Get Roblox API Reference",
       description:
-        "Returns full API documentation for a single Roblox class, enum, datatype, library or global. " +
-        "Includes all own and inherited properties, methods, events, callbacks, parameter types, " +
-        "return types, security levels, thread safety and code samples. " +
-        "Use this to understand how a specific Roblox API works before writing Luau code.",
+        "Returns API documentation for a single Roblox class, enum, datatype, library or global. " +
+        "Own members are always included. Inherited members are excluded by default — " +
+        "set includeInherited=true only when the user explicitly asks about parent-class behavior. " +
+        "Includes parameter types, return types, security levels, thread safety and code samples.",
       inputSchema: {
         topic: z
           .string()
@@ -171,15 +168,20 @@ export function createServer(): McpServer {
           .describe(
             "Exact topic name, case-sensitive. E.g.: Actor, TweenService, KeyCode, Vector3, task",
           ),
+        includeInherited: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe("When true, includes members inherited from parent classes. Default: false."),
       },
     },
-    async ({ topic }) => {
-      const result = await scrapeTopic(topic);
+    async ({ topic, includeInherited }) => {
+      const result = await scrapeTopic(topic, githubToken);
       return {
         content: [
           {
             type: "text" as const,
-            text: JSON.stringify(projectForAI(result.entry), null, 2),
+            text: JSON.stringify(projectForAI(result.entry, includeInherited), null, 2),
           },
         ],
       };
@@ -193,19 +195,30 @@ export function createServer(): McpServer {
       description:
         "Fetches API references for up to 20 Roblox topics in one call. " +
         "Returns partial results — failed topics include an error message, successful ones return full docs. " +
-        "Use this when you need to look up several APIs at once to avoid multiple round-trips.",
+        "Inherited members are excluded by default; set includeInherited=true to include them.",
       inputSchema: {
         topics: z
           .array(z.string().min(1))
           .min(1)
           .max(20)
           .describe("List of exact topic names. Max 20."),
+        includeInherited: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe("When true, includes inherited members for all topics. Default: false."),
       },
     },
-    async ({ topics }) => {
-      const results = await scrapeMany(topics);
+    async ({ topics, includeInherited }) => {
+      const results = await scrapeMany(topics, githubToken);
       const projected = results.map((r) =>
-        r.ok ? { ok: true, topic: r.topic, entry: projectForAI(r.entry) } : r,
+        r.ok
+          ? {
+              ok: true,
+              topic: r.topic,
+              entry: projectForAI(r.entry, includeInherited),
+            }
+          : r,
       );
       return {
         content: [
@@ -229,7 +242,7 @@ export function createServer(): McpServer {
       inputSchema: {},
     },
     async () => {
-      const result = await scrapeIndex();
+      const result = await scrapeIndex(githubToken);
       return {
         content: [
           {
@@ -254,7 +267,7 @@ export function createServer(): McpServer {
       },
     },
     async ({ query }) => {
-      const results = await search(query, { types: ["api"], limit: 1 });
+      const results = await search(query, { types: ["api"], limit: 1 }, githubToken);
       const top = results[0];
       const payload =
         top !== undefined ? { found: true, match: top.name } : { found: false, match: null };
@@ -287,7 +300,7 @@ export function createServer(): McpServer {
       },
     },
     async ({ query }) => {
-      const results = await searchGuides(query, 10);
+      const results = await searchGuides(query, 10, githubToken);
       return {
         content: [
           {
@@ -319,7 +332,7 @@ export function createServer(): McpServer {
       },
     },
     async ({ path }) => {
-      const result = await fetchGuide(path);
+      const result = await fetchGuide(path, githubToken);
       return {
         content: [
           {
@@ -342,7 +355,7 @@ export function createServer(): McpServer {
       inputSchema: {},
     },
     async () => {
-      const entries = await fetchGuideIndex();
+      const entries = await fetchGuideIndex(githubToken);
       return {
         content: [
           {
@@ -352,6 +365,191 @@ export function createServer(): McpServer {
         ],
       };
     },
+  );
+
+  server.registerTool(
+    "get_code_samples",
+    {
+      title: "Get Roblox API Code Samples",
+      description:
+        "Returns only the code samples for a Roblox API topic. " +
+        "Use when you want practical usage examples without the full API payload.",
+      inputSchema: {
+        topic: z
+          .string()
+          .min(1)
+          .describe("Exact topic name, e.g.: TweenService, DataStore, RunService"),
+      },
+    },
+    async ({ topic }) => {
+      const result = await scrapeTopic(topic, githubToken);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(result.entry.class.codeSamples, null, 2),
+          },
+        ],
+      };
+    },
+  );
+
+  server.registerTool(
+    "compare_api_members",
+    {
+      title: "Compare Roblox API Members",
+      description:
+        "Compares member names across 2–5 Roblox API topics. " +
+        "Shows shared members and members unique to each topic.",
+      inputSchema: {
+        topics: z
+          .array(z.string().min(1))
+          .min(2)
+          .max(5)
+          .describe("List of 2–5 exact topic names to compare."),
+      },
+    },
+    async ({ topics }) => {
+      const results = await scrapeMany(topics, githubToken);
+
+      const memberSets = new Map<string, Set<string>>();
+      for (const result of results) {
+        if (!result.ok) continue;
+        const names = new Set<string>();
+        for (const key of MEMBER_KEYS) {
+          for (const m of result.entry.class.ownMembers[key]) {
+            names.add(m.name);
+          }
+        }
+        memberSets.set(result.topic, names);
+      }
+
+      const allTopics = [...memberSets.keys()];
+      const allNames = new Set([...memberSets.values()].flatMap((s) => [...s]));
+
+      const shared: string[] = [];
+      const unique: Record<string, string[]> = Object.fromEntries(allTopics.map((t) => [t, []]));
+
+      for (const name of allNames) {
+        const count = allTopics.filter((t) => memberSets.get(t)?.has(name) === true).length;
+        if (count === memberSets.size) {
+          shared.push(name);
+        } else {
+          for (const t of allTopics) {
+            if (memberSets.get(t)?.has(name) === true) {
+              unique[t]?.push(name);
+            }
+          }
+        }
+      }
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ topics, shared, unique }, null, 2),
+          },
+        ],
+      };
+    },
+  );
+
+  server.registerTool(
+    "get_api_changelog",
+    {
+      title: "Get Roblox API Changelog",
+      description:
+        "Returns deprecation and tag metadata for a Roblox API topic. " +
+        "Use this to avoid suggesting removed or deprecated members.",
+      inputSchema: {
+        topic: z.string().min(1).describe("Exact topic name, e.g.: TweenService, Humanoid"),
+      },
+    },
+    async ({ topic }) => {
+      const result = await scrapeTopic(topic, githubToken);
+      const cl = result.entry.class;
+
+      const deprecated: Array<{ name: string; kind: string; message: string }> = [];
+      const notable: Array<{ name: string; kind: string; tags: string[] }> = [];
+
+      for (const key of MEMBER_KEYS) {
+        const kindLabel = KIND_LABELS[key];
+        for (const m of cl.ownMembers[key]) {
+          if (m.isDeprecated) {
+            deprecated.push({
+              name: m.name,
+              kind: kindLabel,
+              message: m.deprecationMessage,
+            });
+          }
+          const notableTags = m.tags.filter((t) => NOTABLE_TAGS.has(t));
+          if (notableTags.length > 0)
+            notable.push({ name: m.name, kind: kindLabel, tags: notableTags });
+        }
+      }
+
+      for (const group of result.entry.inheritedMembers) {
+        for (const key of MEMBER_KEYS) {
+          const kindLabel = KIND_LABELS[key];
+          for (const m of group[key]) {
+            if (m.isDeprecated) {
+              deprecated.push({
+                name: m.name,
+                kind: kindLabel,
+                message: m.deprecationMessage,
+              });
+            }
+            const notableTags = m.tags.filter((t) => NOTABLE_TAGS.has(t));
+            if (notableTags.length > 0)
+              notable.push({
+                name: m.name,
+                kind: kindLabel,
+                tags: notableTags,
+              });
+          }
+        }
+      }
+
+      const classDeprecated = cl.deprecationMessage.length > 0 || cl.tags.includes("Deprecated");
+
+      const payload: {
+        topic: string;
+        classDeprecated: boolean;
+        classDeprecationMessage?: string;
+        deprecated: Array<{ name: string; kind: string; message: string }>;
+        notable: Array<{ name: string; kind: string; tags: string[] }>;
+      } = { topic, classDeprecated, deprecated, notable };
+
+      if (cl.deprecationMessage) payload.classDeprecationMessage = cl.deprecationMessage;
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(payload, null, 2),
+          },
+        ],
+      };
+    },
+  );
+
+  server.registerPrompt(
+    "roblox-dev-assistant",
+    {
+      title: "Roblox Dev Assistant",
+      description: "Instructs the assistant to follow the correct RoDocs lookup flow.",
+    },
+    () => ({
+      messages: [
+        {
+          role: "user" as const,
+          content: {
+            type: "text" as const,
+            text: ROBLOX_DEV_ASSISTANT_PROMPT,
+          },
+        },
+      ],
+    }),
   );
 
   return server;

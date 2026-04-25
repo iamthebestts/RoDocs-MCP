@@ -46,8 +46,7 @@ const mockFetchGuideIndex = vi.hoisted(() =>
     {
       path: "scripting/events/bindable.md",
       title: "Bindable Events",
-      description:
-        "How to use bindable events for server to server communication",
+      description: "How to use bindable events for server to server communication",
       category: "scripting",
     },
     {
@@ -77,13 +76,7 @@ vi.mock("../guides.js", () => ({
   searchGuides: vi.fn(),
 }));
 
-import {
-  _resetIndexesForTesting,
-  search,
-  searchApis,
-  searchGuides,
-  warmUp,
-} from "../search.js";
+import { _resetIndexesForTesting, search, searchApis, searchGuides, warmUp } from "../search.js";
 
 describe("search", () => {
   beforeEach(() => {

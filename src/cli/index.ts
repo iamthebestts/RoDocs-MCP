@@ -1,4 +1,5 @@
-// src/cli/index.ts
+import { resolve as resolvePath } from "node:path";
+import { pathToFileURL } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type {
   CodeSample,
@@ -10,6 +11,7 @@ import type {
 import { fetchGuide, searchGuides } from "../scraper/guides.js";
 import { findClosestApiName, scrapeIndex, scrapeTopic } from "../scraper/index.js";
 import { createServer } from "../server/index.js";
+import { parseGithubTokenArgs } from "../utils/github-token.js";
 
 const W = 76;
 const HR = "─".repeat(W);
@@ -123,18 +125,12 @@ function formatMember(m: RichMember, kind: string): string {
 
   const parts: string[] = [nameLine];
 
-  const summary = m.summary || m.description;
-  if (summary) {
-    parts.push(`     ${dim(truncate(summary, W - 5))}`);
+  if (m.summary) {
+    parts.push(`     ${dim(truncate(m.summary, W - 5))}`);
   }
 
   if (m.type !== undefined) {
-    const typeName =
-      typeof m.type === "object" && m.type !== null
-        ? (((m.type as Record<string, unknown>).Name as string | undefined) ??
-          JSON.stringify(m.type))
-        : String(m.type);
-    parts.push(`     ${dim("type:")} ${c("yellow", typeName)}`);
+    parts.push(`     ${dim("type:")} ${c("yellow", m.type)}`);
   }
 
   if (Array.isArray(m.parameters) && m.parameters.length > 0) {
@@ -142,17 +138,8 @@ function formatMember(m: RichMember, kind: string): string {
     parts.push(`     ${dim("params:")} ${paramStr}`);
   }
 
-  if (Array.isArray(m.returns) && m.returns.length > 0) {
-    const first = m.returns[0] as Record<string, unknown> | undefined;
-    if (first !== undefined) {
-      const retType =
-        typeof first.Type === "object" && first.Type !== null
-          ? (((first.Type as Record<string, unknown>).Name as string | undefined) ?? "unknown")
-          : typeof first.type === "string"
-            ? first.type
-            : "unknown";
-      parts.push(`     ${dim("returns:")} ${c("green", retType)}`);
-    }
+  if (m.returns !== undefined) {
+    parts.push(`     ${dim("returns:")} ${c("green", m.returns)}`);
   }
 
   if (m.threadSafety && m.threadSafety !== "Unsafe") {
@@ -361,6 +348,7 @@ function printHelp(): void {
       `  ${c("green", "rodocsmcp")} ${c("yellow", "--find <query>")}      Find closest API name`,
       `  ${c("green", "rodocsmcp")} ${c("yellow", "--guide <path>")}      Fetch a guide by path`,
       `  ${c("green", "rodocsmcp")} ${c("yellow", "--search-guide <q>")}  Search guides by keyword`,
+      `  ${c("green", "rodocsmcp")} ${c("yellow", "--github-token <t>")}  Authenticate GitHub requests`,
       `  ${c("green", "rodocsmcp")} ${c("yellow", "--help")} ${dim("| -h")}          Show this help`,
       "",
       bold("EXAMPLES"),
@@ -378,21 +366,21 @@ function printHelp(): void {
 
 // ! Modes
 
-async function runMcpServer(): Promise<void> {
-  const server = createServer();
+async function runMcpServer(githubToken?: string): Promise<void> {
+  const server = githubToken ? createServer({ githubToken }) : createServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
   process.stderr.write("rodocsmcp MCP server ready (stdio)\n");
 }
 
-async function runTopicCli(topic: string): Promise<void> {
+async function runTopicCli(topic: string, githubToken?: string): Promise<void> {
   process.stderr.write(`${dim(`Fetching "${topic}"...`)}\n`);
   try {
-    const result = await scrapeTopic(topic);
+    const result = await scrapeTopic(topic, githubToken);
     process.stdout.write(`${formatEntry(result.entry)}\n`);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    const suggestion = await findClosestApiName(topic).catch(() => null);
+    const suggestion = await findClosestApiName(topic, githubToken).catch(() => null);
     process.stderr.write(`${c("red", "✖")} ${message}\n`);
     if (suggestion !== null) {
       process.stderr.write(`${c("yellow", "?")} Did you mean: ${bold(c("cyan", suggestion))}?\n`);
@@ -401,9 +389,9 @@ async function runTopicCli(topic: string): Promise<void> {
   }
 }
 
-async function runListCli(): Promise<void> {
+async function runListCli(githubToken?: string): Promise<void> {
   process.stderr.write(`${dim("Fetching API index...")}\n`);
-  const result = await scrapeIndex();
+  const result = await scrapeIndex(githubToken);
 
   const lines: string[] = [
     "",
@@ -420,9 +408,9 @@ async function runListCli(): Promise<void> {
   process.stdout.write(`${lines.join("\n")}\n`);
 }
 
-async function runFindCli(query: string): Promise<void> {
+async function runFindCli(query: string, githubToken?: string): Promise<void> {
   process.stderr.write(`${dim(`Searching for "${query}"...`)}\n`);
-  const match = await findClosestApiName(query);
+  const match = await findClosestApiName(query, githubToken);
   if (match !== null) {
     process.stdout.write(`${c("green", "✔")} Closest match: ${bold(c("cyan", match))}\n`);
   } else {
@@ -430,16 +418,16 @@ async function runFindCli(query: string): Promise<void> {
   }
 }
 
-async function runGuideSearchCli(query: string): Promise<void> {
+async function runGuideSearchCli(query: string, githubToken?: string): Promise<void> {
   process.stderr.write(`${dim(`Searching guides for "${query}"...`)}\n`);
-  const results = await searchGuides(query);
+  const results = await searchGuides(query, githubToken);
   process.stdout.write(formatGuideSearch(results));
 }
 
-async function runGuideCli(path: string): Promise<void> {
+async function runGuideCli(path: string, githubToken?: string): Promise<void> {
   process.stderr.write(`${dim(`Fetching guide "${path}"...`)}\n`);
   try {
-    const result = await fetchGuide(path);
+    const result = await fetchGuide(path, githubToken);
     process.stdout.write(formatGuideContent(result.path, result.markdown));
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
@@ -450,11 +438,14 @@ async function runGuideCli(path: string): Promise<void> {
 
 // ! Entry point
 
-async function main(): Promise<void> {
-  const args = process.argv.slice(2);
+export async function main(
+  argv: readonly string[] = process.argv.slice(2),
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  const { args, githubToken } = parseGithubTokenArgs(argv, env);
 
   if (args.length === 0 || args.includes("--stdio")) {
-    await runMcpServer();
+    await runMcpServer(githubToken);
     return;
   }
 
@@ -466,7 +457,7 @@ async function main(): Promise<void> {
   }
 
   if (first === "--list") {
-    await runListCli();
+    await runListCli(githubToken);
     return;
   }
 
@@ -476,7 +467,7 @@ async function main(): Promise<void> {
       process.stderr.write(`${c("red", "✖")} --find requires a query argument.\n`);
       process.exit(1);
     }
-    await runFindCli(query);
+    await runFindCli(query, githubToken);
     return;
   }
 
@@ -486,7 +477,7 @@ async function main(): Promise<void> {
       process.stderr.write(`${c("red", "✖")} --search-guide requires a query argument.\n`);
       process.exit(1);
     }
-    await runGuideSearchCli(query);
+    await runGuideSearchCli(query, githubToken);
     return;
   }
 
@@ -496,17 +487,25 @@ async function main(): Promise<void> {
       process.stderr.write(`${c("red", "✖")} --guide requires a path argument.\n`);
       process.exit(1);
     }
-    await runGuideCli(path);
+    await runGuideCli(path, githubToken);
     return;
   }
 
   if (first !== undefined) {
-    await runTopicCli(first);
+    await runTopicCli(first, githubToken);
   }
 }
 
-main().catch((err: unknown) => {
-  const message = err instanceof Error ? err.message : String(err);
-  process.stderr.write(`${c("red", "✖")} ${message}\n`);
-  process.exit(1);
-});
+function isDirectRun(): boolean {
+  const entry = process.argv[1];
+  if (entry === undefined) return false;
+  return import.meta.url === pathToFileURL(resolvePath(entry)).href;
+}
+
+if (isDirectRun()) {
+  main().catch((err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`${c("red", "✖")} ${message}\n`);
+    process.exit(1);
+  });
+}

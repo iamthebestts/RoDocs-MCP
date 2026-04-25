@@ -1,5 +1,7 @@
 # CLI Reference
 
+GitHub-backed requests can be authenticated with `--github-token <token>` or `GITHUB_TOKEN`. The explicit flag takes precedence.
+
 ## Command Modes
 
 ### Default / Server Mode
@@ -8,6 +10,8 @@ Starts the MCP server using stdio transport.
 rodocsmcp
 # or
 rodocsmcp --stdio
+# or
+rodocsmcp --stdio --github-token "$GITHUB_TOKEN"
 ```
 **Output**
 ```text
@@ -91,6 +95,17 @@ GUIDE: scripting/data/data-stores.md
 ...
 ```
 
+### GitHub Authentication
+Authenticates requests that hit GitHub-hosted APIs or raw content.
+```bash
+rodocsmcp --github-token "$GITHUB_TOKEN" Actor
+```
+
+You can also omit the flag and rely on:
+```bash
+GITHUB_TOKEN=your_pat rodocsmcp --search-guide "data store"
+```
+
 ### Help
 Displays the CLI usage guide.
 ```bash
@@ -104,3 +119,15 @@ USAGE
   rodocsmcp                    Start MCP server (stdio)
   ...
 ```
+
+### Flags Summary
+
+| Flag | Description |
+| :--- | :--- |
+| `--stdio` | Starts the MCP server over stdio. |
+| `--list` | Lists all known class and enum names. |
+| `--find <query>` | Resolves the closest API name. |
+| `--search-guide <query>` | Searches creator guides by keyword. |
+| `--guide <path>` | Fetches a guide by relative path. |
+| `--github-token <token>` | Adds GitHub authentication for GitHub API and raw content requests. |
+| `--help`, `-h` | Prints CLI help. |

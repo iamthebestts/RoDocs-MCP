@@ -1,11 +1,14 @@
 # MCP Tools Reference
 
+The server can authenticate GitHub-backed fetches with `--github-token <token>` or `GITHUB_TOKEN` when started over stdio.
+
 ## `get_api_reference`
 Returns full API documentation for a single Roblox class, enum, datatype, library or global.
 
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
 | `topic` | `string` | Yes | Exact topic name, case-sensitive. E.g.: Actor, TweenService. |
+| `includeInherited` | `boolean` | No | Includes members inherited from parent classes. Default: `false`. |
 
 **Example Response**
 ```json
@@ -36,6 +39,7 @@ Fetches API references for up to 20 Roblox topics in one call.
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
 | `topics` | `string[]` | Yes | List of exact topic names. Max 20. |
+| `includeInherited` | `boolean` | No | Includes inherited members for every topic. Default: `false`. |
 
 **Example Response**
 ```json
@@ -68,7 +72,7 @@ Returns a flat list of all Roblox class names and enum names.
 }
 ```
 
-## `find_closest_api_name`
+## `find_api_name`
 BM25-searches all known class and enum names for the closest match to a query. Resolves common aliases (e.g., 'datastore').
 
 | Parameter | Type | Required | Description |
@@ -132,3 +136,69 @@ Returns the full index of all Roblox creator guide paths and their categories.
   }
 ]
 ```
+
+## `get_code_samples`
+Returns only the code samples for a Roblox API topic.
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `topic` | `string` | Yes | Exact topic name. E.g.: TweenService, DataStore, RunService. |
+
+**Example Response**
+```json
+[
+  {
+    "identifier": "create-tween",
+    "displayName": "Create Tween",
+    "description": "Basic TweenService example",
+    "language": "luau",
+    "code": "local TweenService = game:GetService(\"TweenService\")"
+  }
+]
+```
+
+## `compare_api_members`
+Compares member names across 2 to 5 Roblox API topics and returns shared and topic-specific members.
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `topics` | `string[]` | Yes | List of 2 to 5 exact topic names. |
+
+**Example Response**
+```json
+{
+  "topics": ["TweenService", "RunService"],
+  "shared": [],
+  "unique": {
+    "TweenService": ["Create"],
+    "RunService": ["BindToRenderStep"]
+  }
+}
+```
+
+## `get_api_changelog`
+Returns deprecation and notable tag metadata for a Roblox API topic.
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `topic` | `string` | Yes | Exact topic name. E.g.: TweenService, Humanoid. |
+
+**Example Response**
+```json
+{
+  "topic": "Humanoid",
+  "classDeprecated": false,
+  "deprecated": [],
+  "notable": [
+    {
+      "name": "Health",
+      "kind": "property",
+      "tags": ["ReadOnly"]
+    }
+  ]
+}
+```
+
+## Prompt
+
+The server also registers the `roblox-dev-assistant` prompt, which instructs MCP clients to prefer the intended RoDocs lookup flow for API names, references, guides, comparisons, and deprecation checks.
