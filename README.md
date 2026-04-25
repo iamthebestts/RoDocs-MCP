@@ -2,8 +2,8 @@
 
 Typed scraper and MCP server for the Roblox Creator Hub API Reference and Guides.
 
-[![npm version](https://img.shields.io/npm/v/%40iamthebestts%2Frodocsmcp?style=flat-square)](https://www.npmjs.com/package/@iamthebestts/rodocsmcp)
-[![license](https://img.shields.io/npm/l/%40iamthebestts%2Frodocsmcp?style=flat-square)](LICENSE)
+[![npm version](https://img.shields.io/npm/v/rodocsmcp?style=flat-square)](https://www.npmjs.com/package/rodocsmcp)
+[![license](https://img.shields.io/npm/l/rodocsmcp?style=flat-square)](LICENSE)
 [![node](https://img.shields.io/badge/node-%3E%3D20-green?style=flat-square)](https://nodejs.org)
 
 Provides MCP-compatible AI assistants with structured access to Roblox API + Creator Hub guides.
@@ -17,7 +17,7 @@ Provides MCP-compatible AI assistants with structured access to Roblox API + Cre
   "mcpServers": {
     "rodocs": {
       "command": "npx",
-      "args": ["-y", "@iamthebestts/rodocsmcp", "--stdio"]
+      "args": ["-y", "rodocsmcp", "--stdio"]
     }
   }
 }
@@ -30,7 +30,7 @@ If you need higher GitHub API limits or access to authenticated raw/content fetc
   "mcpServers": {
     "rodocs": {
       "command": "npx",
-      "args": ["-y", "@iamthebestts/rodocsmcp", "--stdio", "--github-token", "YOUR_GITHUB_PAT"]
+      "args": ["-y", "rodocsmcp", "--stdio", "--github-token", "YOUR_GITHUB_PAT"]
     }
   }
 }
@@ -60,13 +60,13 @@ If you need higher GitHub API limits or access to authenticated raw/content fetc
 ### Usage
 
 ```bash
-npx @iamthebestts/rodocsmcp TweenService
-npx @iamthebestts/rodocsmcp --list
-npx @iamthebestts/rodocsmcp --find tweenserv
-npx @iamthebestts/rodocsmcp --search-guide "data store"
-npx @iamthebestts/rodocsmcp --guide scripting/data/data-stores.md
-npx @iamthebestts/rodocsmcp --github-token "$GITHUB_TOKEN" TweenService
-npx @iamthebestts/rodocsmcp --stdio
+npx rodocsmcp TweenService
+npx rodocsmcp --list
+npx rodocsmcp --find tweenserv
+npx rodocsmcp --search-guide "data store"
+npx rodocsmcp --guide scripting/data/data-stores.md
+npx rodocsmcp --github-token "$GITHUB_TOKEN" TweenService
+npx rodocsmcp --stdio
 ```
 
 ### Commands
@@ -100,7 +100,7 @@ import {
   scrapeMany,
   scrapeIndex,
   findClosestApiName,
-} from "@iamthebestts/rodocsmcp";
+} from "rodocsmcp";
 
 await scrapeTopic("Actor");
 await scrapeMany(["Vector3", "CFrame"]);

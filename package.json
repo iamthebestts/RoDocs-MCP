@@ -1,5 +1,5 @@
 {
-  "name": "@iamthebestts/rodocsmcp",
+  "name": "rodocsmcp",
   "version": "2.0.0",
   "description": "Typed scraper and MCP server for Roblox Creator Hub API Reference and Guides.",
   "license": "MIT",
