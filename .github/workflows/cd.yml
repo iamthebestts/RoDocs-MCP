@@ -3,7 +3,7 @@ name: CD
 on:
   push:
     tags:
-      - "v[0-9]+.[0-9]+.[0-9]+*"
+      - "v*.*.*"
 
 permissions: {}
 
@@ -30,7 +30,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@a7487c78e59c2de0a6a6d50f5b0d5d8e1c1e2f3c # v4
+        uses: pnpm/action-setup@v4
         with:
           run_install: false
 
@@ -86,7 +86,7 @@ jobs:
 
       - name: Generate changelog
         id: changelog
-        uses: orhun/git-cliff-action@b946fe6c1f13b7c5d8daa93ebc15c15ac28a7bd6 # v5.0.0
+        uses: orhun/git-cliff-action@v4
         with:
           config: cliff.toml
           args: --latest --strip header
