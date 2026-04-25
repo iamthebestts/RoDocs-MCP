@@ -8,6 +8,8 @@ Typed scraper and MCP server for the Roblox Creator Hub API Reference and Guides
 
 Provides MCP-compatible AI assistants with structured access to Roblox API + Creator Hub guides.
 
+![Demo](.github/assets/RoDocs%20preview.gif)
+
 ---
 
 ## MCP Setup
