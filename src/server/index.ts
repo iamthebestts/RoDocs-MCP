@@ -3,8 +3,11 @@ import { z } from "zod";
 import type { RichMember, RobloxDocEntry } from "../scraper/fetch.js";
 import { fetchGuide, fetchGuideIndex } from "../scraper/guides.js";
 import { scrapeIndex, scrapeMany, scrapeTopic } from "../scraper/index.js";
-import { search, searchGuides, warmUp } from "../scraper/search.js";
+import { search, searchGuides, warmUp, initIndexer } from "../scraper/search.js";
 import { parseGithubTokenArgs, resolveGithubToken } from "../utils/github-token.js";
+import { createSyncStateManager, LmdbStore } from "../store/index.js";
+
+// ! AI projection types
 
 // ! AI projection types
 
@@ -144,13 +147,21 @@ function resolveServerGithubToken(options: CreateServerOptions): string | undefi
 }
 
 export function createServer(options: CreateServerOptions = {}): McpServer {
-  const githubToken = resolveServerGithubToken(options);
-  const server = new McpServer({
-    name: "rodocsmcp",
-    version: "1.0.0",
-  });
+	const githubToken = resolveServerGithubToken(options);
+	
+	// Initialize LMDB Store for index persistence
+	const store = new LmdbStore();
+	store.open().catch(err => console.error(`[Server] Store open failed: ${err}`));
+	const syncManager = createSyncStateManager(store);
+	initIndexer(store, syncManager);
 
-  warmUp(githubToken);
+	const server = new McpServer({
+		name: "rodocsmcp",
+		version: "1.0.0",
+	});
+
+	warmUp(githubToken);
+
 
   server.registerTool(
     "get_api_reference",

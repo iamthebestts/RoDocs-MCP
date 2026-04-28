@@ -120,6 +120,48 @@ export class BM25 {
     return this.docs.length;
   }
 
+  /**
+   * Serializes the current index state into a plain object for persistence.
+   */
+  serialize(): {
+    termFreqs: Array<[string, Array<[string, number]>]>;
+    idfScores: Array<[string, number]>;
+    docLengths: Array<[string, number]>;
+    avgDocLength: number;
+    docs: readonly BM25Doc[];
+  } {
+    return {
+      termFreqs: Array.from(this.termFreqs.entries()).map(([term, postings]) => [
+        term,
+        Array.from(postings.entries()),
+      ]),
+      idfScores: Array.from(this.idfScores.entries()),
+      docLengths: Array.from(this.docLengths.entries()),
+      avgDocLength: this.avgDocLength,
+      docs: this.docs,
+    };
+  }
+
+  /**
+   * Restores the index state from a serialized object.
+   */
+  restore(data: {
+    termFreqs: Array<[string, Array<[string, number]>]>;
+    idfScores: Array<[string, number]>;
+    docLengths: Array<[string, number]>;
+    avgDocLength: number;
+    docs: readonly BM25Doc[];
+  }): void {
+    this.docs = data.docs;
+    this.avgDocLength = data.avgDocLength;
+    
+    this.termFreqs = new Map(
+      data.termFreqs.map(([term, postings]) => [term, new Map(postings)]),
+    );
+    this.idfScores = new Map(data.idfScores);
+    this.docLengths = new Map(data.docLengths);
+  }
+
   reset(): void {
     this.docs = [];
     this.termFreqs = new Map();

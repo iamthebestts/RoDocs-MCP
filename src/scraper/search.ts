@@ -4,9 +4,13 @@ import { BM25 } from "./bm25.js";
 import { fetchIndex } from "./fetch.js";
 import type { GuideMetadata } from "./guides.js";
 import { fetchGuideIndex } from "./guides.js";
+import { Indexer } from "../store/indexer.js";
+import { LmdbStore, SyncStateManager } from "../store/index.js";
 
 const apiBM25 = new BM25();
 const guideBM25 = new BM25();
+
+let indexer: Indexer | null = null;
 
 const apiCategories = new Map<string, "class" | "enum">();
 const guideMetaById = new Map<string, GuideMetadata>();
@@ -18,59 +22,83 @@ const GUIDE_SCORE_THRESHOLD = 5;
 const API_SCORE_THRESHOLD = 5;
 let guideScoreThreshold = GUIDE_SCORE_THRESHOLD;
 
+/**
+ * Initialize the indexer with the provided store and sync manager.
+ */
+export function initIndexer(store: LmdbStore, syncManager: SyncStateManager): void {
+	indexer = new Indexer(store, syncManager);
+}
+
 function buildApiIndex(githubToken?: string): Promise<void> {
-  if (apiIndexing !== null) return apiIndexing;
+	if (apiIndexing !== null) return apiIndexing;
 
-  apiIndexing = (async (): Promise<void> => {
-    const { classes, enums } = await fetchIndex(githubToken);
-    const docs: BM25Doc[] = [];
+	apiIndexing = (async (): Promise<void> => {
+		const build = async () => {
+			const { classes, enums } = await fetchIndex(githubToken);
+			const docs: BM25Doc[] = [];
 
-    for (const name of classes) {
-      docs.push({ id: name, fields: { title: name, path: `classes/${name}` } });
-      apiCategories.set(name, "class");
-    }
+			for (const name of classes) {
+				docs.push({ id: name, fields: { title: name, path: `classes/${name}` } });
+				apiCategories.set(name, "class");
+			}
 
-    for (const name of enums) {
-      docs.push({ id: name, fields: { title: name, path: `enums/${name}` } });
-      apiCategories.set(name, "enum");
-    }
+			for (const name of enums) {
+				docs.push({ id: name, fields: { title: name, path: `enums/${name}` } });
+				apiCategories.set(name, "enum");
+			}
 
-    apiBM25.index(docs);
-  })().catch((error: unknown) => {
-    apiIndexing = null;
-    throw error;
-  });
+			apiBM25.index(docs);
+		};
 
-  return apiIndexing;
+		if (indexer) {
+			await indexer.loadOrBuildIndex("api", apiBM25, build);
+		} else {
+			await build();
+		}
+	})().catch((error: unknown) => {
+		apiIndexing = null;
+		throw error;
+	});
+
+	return apiIndexing;
 }
 
 function buildGuideIndex(githubToken?: string): Promise<void> {
-  if (guideIndexing !== null) return guideIndexing;
+	if (guideIndexing !== null) return guideIndexing;
 
-  guideIndexing = (async (): Promise<void> => {
-    const entries = await fetchGuideIndex(githubToken);
-    const docs: BM25Doc[] = [];
+	guideIndexing = (async (): Promise<void> => {
+		const build = async () => {
+			const entries = await fetchGuideIndex(githubToken);
+			const docs: BM25Doc[] = [];
 
-    for (const entry of entries) {
-      docs.push({
-        id: entry.path,
-        fields: {
-          title: entry.title,
-          path: entry.path,
-          description: entry.description,
-        },
-      });
-      guideMetaById.set(entry.path, entry);
-    }
+			for (const entry of entries) {
+				docs.push({
+					id: entry.path,
+					fields: {
+						title: entry.title,
+						path: entry.path,
+						description: entry.description,
+					},
+				});
+				guideMetaById.set(entry.path, entry);
+			}
 
-    guideBM25.index(docs);
-  })().catch((error: unknown) => {
-    guideIndexing = null;
-    throw error;
-  });
+			guideBM25.index(docs);
+		};
 
-  return guideIndexing;
+		if (indexer) {
+			await indexer.loadOrBuildIndex("guides", guideBM25, build);
+		} else {
+			await build();
+		}
+	})().catch((error: unknown) => {
+		guideIndexing = null;
+		throw error;
+	});
+
+	return guideIndexing;
 }
+
 
 export async function searchApis(
   query: string,
