@@ -6,6 +6,9 @@ import { scrapeIndex, scrapeMany, scrapeTopic } from "../scraper/index.js";
 import { search, searchGuides, warmUp, initIndexer } from "../scraper/search.js";
 import { parseGithubTokenArgs, resolveGithubToken } from "../utils/github-token.js";
 import { createSyncStateManager, LmdbStore } from "../store/index.js";
+import { FastFlagSearch } from "../fastflags/search.js";
+
+// ! AI projection types
 
 // ! AI projection types
 
@@ -154,6 +157,7 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
 	store.open().catch(err => console.error(`[Server] Store open failed: ${err}`));
 	const syncManager = createSyncStateManager(store);
 	initIndexer(store, syncManager);
+	const ffSearch = new FastFlagSearch(store);
 
 	const server = new McpServer({
 		name: "rodocsmcp",
@@ -465,84 +469,143 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
     },
   );
 
-  server.registerTool(
-    "get_api_changelog",
-    {
-      title: "Get Roblox API Changelog",
-      description:
-        "Returns deprecation and tag metadata for a Roblox API topic. " +
-        "Use this to avoid suggesting removed or deprecated members.",
-      inputSchema: {
-        topic: z.string().min(1).describe("Exact topic name, e.g.: TweenService, Humanoid"),
-      },
-    },
-    async ({ topic }) => {
-      const result = await scrapeTopic(topic, githubToken);
-      const cl = result.entry.class;
+	server.registerTool(
+		"get_api_changelog",
+		{
+			title: "Get Roblox API Changelog",
+			description:
+				"Returns deprecation and tag metadata for a Roblox API topic. " +
+				"Use this to avoid suggesting removed or deprecated members.",
+			inputSchema: {
+				topic: z.string().min(1).describe("Exact topic name, e.g.: TweenService, Humanoid"),
+			},
+		},
+		async ({ topic }) => {
+			const result = await scrapeTopic(topic, githubToken);
+			const cl = result.entry.class;
+		
+			const deprecated: Array<{ name: string; kind: string; message: string }> = [];
+			const notable: Array<{ name: string; kind: string; tags: string[] }> = [];
+		
+			for (const key of MEMBER_KEYS) {
+				const kindLabel = KIND_LABELS[key];
+				for (const m of cl.ownMembers[key]) {
+					if (m.isDeprecated) {
+						deprecated.push({
+							name: m.name,
+							kind: kindLabel,
+							message: m.deprecationMessage,
+						});
+					}
+					const notableTags = m.tags.filter((t) => NOTABLE_TAGS.has(t));
+					if (notableTags.length > 0)
+						notable.push({ name: m.name, kind: kindLabel, tags: notableTags });
+				}
+			}
+		
+			for (const group of result.entry.inheritedMembers) {
+				for (const key of MEMBER_KEYS) {
+					const kindLabel = KIND_LABELS[key];
+					for (const m of group[key]) {
+						if (m.isDeprecated) {
+							deprecated.push({
+								name: m.name,
+								kind: kindLabel,
+								message: m.deprecationMessage,
+							});
+						}
+						const notableTags = m.tags.filter((t) => NOTABLE_TAGS.has(t));
+						if (notableTags.length > 0)
+							notable.push({ name: m.name, kind: kindLabel, tags: notableTags });
+					}
+				}
+			}
+		
+			const classDeprecated = cl.deprecationMessage.length > 0 || cl.tags.includes("Deprecated");
+		
+			const payload: {
+				topic: string;
+				classDeprecated: boolean;
+				classDeprecationMessage?: string;
+				deprecated: Array<{ name: string; kind: string; message: string }>;
+				notable: Array<{ name: string; kind: string; tags: string[] }>;
+			} = { topic, classDeprecated, deprecated, notable };
+		
+			if (cl.deprecationMessage) payload.classDeprecationMessage = cl.deprecationMessage;
+		
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: JSON.stringify(payload, null, 2),
+					},
+				],
+			};
+		},
+	);
 
-      const deprecated: Array<{ name: string; kind: string; message: string }> = [];
-      const notable: Array<{ name: string; kind: string; tags: string[] }> = [];
+	server.registerTool(
+		"roblox_fastflags",
+		{
+			title: "Search Roblox FastFlags",
+			description:
+				"Searches for Roblox FastFlags (FFlags) in the local store. " +
+				"Supports filtering by name, kind, behavior, and platform. " +
+				"Returns a list of flags with their values and metadata.",
+			inputSchema: {
+				query: z.string().optional().describe("Substring or exact name of the flag to search for."),
+				kind: z.enum(["FFlag", "FInt", "FString", "FLog", "FBoolean", "Unknown"]).optional().describe("Filter by flag type."),
+				behavior: z.enum(["Fast", "Dynamic", "Synchronized", "Unknown"]).optional().describe("Filter by update behavior."),
+				platform: z.string().optional().describe("Filter by specific platform."),
+				limit: z.number().min(1).max(100).optional().default(50).describe("Maximum number of results to return."),
+			},
+		},
+		async (args) => {
+			try {
+				const flags = await ffSearch.search(args);
+				
+				if (flags.length === 0) {
+					return {
+						content: [
+						  {
+							type: "text" as const,
+							text: "No FastFlags found matching the criteria. If the store is empty, please run the --seed-fastflags command first.",
+						  }
+						],
+					};
+				}
 
-      for (const key of MEMBER_KEYS) {
-        const kindLabel = KIND_LABELS[key];
-        for (const m of cl.ownMembers[key]) {
-          if (m.isDeprecated) {
-            deprecated.push({
-              name: m.name,
-              kind: kindLabel,
-              message: m.deprecationMessage,
-            });
-          }
-          const notableTags = m.tags.filter((t) => NOTABLE_TAGS.has(t));
-          if (notableTags.length > 0)
-            notable.push({ name: m.name, kind: kindLabel, tags: notableTags });
-        }
-      }
+				const projected = flags.map(f => ({
+					name: f.name,
+					value: f.value,
+					kind: f.kind,
+					behavior: f.behavior,
+					platforms: f.platforms,
+					channels: f.channels,
+					source: "MaximumADHD",
+				}));
 
-      for (const group of result.entry.inheritedMembers) {
-        for (const key of MEMBER_KEYS) {
-          const kindLabel = KIND_LABELS[key];
-          for (const m of group[key]) {
-            if (m.isDeprecated) {
-              deprecated.push({
-                name: m.name,
-                kind: kindLabel,
-                message: m.deprecationMessage,
-              });
-            }
-            const notableTags = m.tags.filter((t) => NOTABLE_TAGS.has(t));
-            if (notableTags.length > 0)
-              notable.push({
-                name: m.name,
-                kind: kindLabel,
-                tags: notableTags,
-              });
-          }
-        }
-      }
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: JSON.stringify(projected, null, 2),
+						},
+					],
+				};
+			} catch (error) {
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: `Error searching FastFlags: ${error instanceof Error ? error.message : String(error)}`,
+						},
+					],
+				};
+			}
+		},
+	);
 
-      const classDeprecated = cl.deprecationMessage.length > 0 || cl.tags.includes("Deprecated");
-
-      const payload: {
-        topic: string;
-        classDeprecated: boolean;
-        classDeprecationMessage?: string;
-        deprecated: Array<{ name: string; kind: string; message: string }>;
-        notable: Array<{ name: string; kind: string; tags: string[] }>;
-      } = { topic, classDeprecated, deprecated, notable };
-
-      if (cl.deprecationMessage) payload.classDeprecationMessage = cl.deprecationMessage;
-
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(payload, null, 2),
-          },
-        ],
-      };
-    },
-  );
 
   server.registerPrompt(
     "roblox-dev-assistant",
