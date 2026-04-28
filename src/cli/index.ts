@@ -2,36 +2,39 @@ import { resolve as resolvePath } from "node:path";
 import { pathToFileURL } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type {
-  CodeSample,
-  InheritedGroup,
-  OwnMembers,
-  RichMember,
-  RobloxDocEntry,
+	CodeSample,
+	InheritedGroup,
+	OwnMembers,
+	RichMember,
+	RobloxDocEntry,
 } from "../scraper/fetch.js";
 import { fetchGuide, searchGuides } from "../scraper/guides.js";
 import { findClosestApiName, scrapeIndex, scrapeTopic } from "../scraper/index.js";
 import { createServer } from "../server/index.js";
 import { parseGithubTokenArgs } from "../utils/github-token.js";
+import { LmdbStore, createSyncStateManager } from "../store/index.js";
+import { FastFlagScraper } from "../fastflags/scraper.js";
 
 const W = 76;
 const HR = "─".repeat(W);
 const HR_THIN = "╌".repeat(W);
 
 const C = {
-  reset: "\x1b[0m",
-  bold: "\x1b[1m",
-  dim: "\x1b[2m",
-  italic: "\x1b[3m",
-  yellow: "\x1b[33m",
-  cyan: "\x1b[36m",
-  green: "\x1b[32m",
-  red: "\x1b[31m",
-  magenta: "\x1b[35m",
-  blue: "\x1b[34m",
-  gray: "\x1b[90m",
-  white: "\x1b[97m",
-  bgDark: "\x1b[48;5;236m",
+	reset: "\x1b[0m",
+	bold: "\x1b[1m",
+	dim: "\x1b[2m",
+	italic: "\x1b[3m",
+	yellow: "\x1b[33m",
+	cyan: "\x1b[36m",
+	green: "\x1b[32m",
+	red: "\x1b[31m",
+	magenta: "\x1b[35m",
+	blue: "\x1b[34m",
+	gray: "\x1b[90m",
+	white: "\x1b[97m",
+	bgDark: "\x1b[48;5;236m",
 } as const;
+
 
 function c(color: keyof typeof C, text: string): string {
   return `${C[color]}${text}${C.reset}`;
@@ -335,34 +338,37 @@ function formatGuideContent(path: string, markdown: string): string {
 // ! Help
 
 function printHelp(): void {
-  process.stdout.write(
-    [
-      "",
-      bold(c("cyan", "rodocsmcp")) + dim(" — Roblox Creator Hub API reference & MCP server"),
-      "",
-      bold("USAGE"),
-      `  ${c("green", "rodocsmcp")}                    Start MCP server ${dim("(stdio)")}`,
-      `  ${c("green", "rodocsmcp")} ${c("yellow", "--stdio")}             Start MCP server ${dim("(stdio, explicit)")}`,
-      `  ${c("green", "rodocsmcp")} ${c("yellow", "<TopicName>")}         Print docs for a topic`,
-      `  ${c("green", "rodocsmcp")} ${c("yellow", "--list")}              List all class and enum names`,
-      `  ${c("green", "rodocsmcp")} ${c("yellow", "--find <query>")}      Find closest API name`,
-      `  ${c("green", "rodocsmcp")} ${c("yellow", "--guide <path>")}      Fetch a guide by path`,
-      `  ${c("green", "rodocsmcp")} ${c("yellow", "--search-guide <q>")}  Search guides by keyword`,
-      `  ${c("green", "rodocsmcp")} ${c("yellow", "--github-token <t>")}  Authenticate GitHub requests`,
-      `  ${c("green", "rodocsmcp")} ${c("yellow", "--help")} ${dim("| -h")}          Show this help`,
-      "",
-      bold("EXAMPLES"),
-      `  ${dim("$")} rodocsmcp Actor`,
-      `  ${dim("$")} rodocsmcp TweenService`,
-      `  ${dim("$")} rodocsmcp KeyCode`,
-      `  ${dim("$")} rodocsmcp --list`,
-      `  ${dim("$")} rodocsmcp --find tweenserv`,
-      `  ${dim("$")} rodocsmcp --search-guide "data store"`,
-      `  ${dim("$")} rodocsmcp --guide scripting/data/data-stores.md`,
-      "",
-    ].join("\n"),
-  );
+	process.stdout.write(
+		[
+			"",
+			bold(c("cyan", "rodocsmcp")) + dim(" — Roblox Creator Hub API reference & MCP server"),
+			"",
+			bold("USAGE"),
+			`  ${c("green", "rodocsmcp")}                    Start MCP server ${dim("(stdio)")}`,
+			`  ${c("green", "rodocsmcp")} ${c("yellow", "--stdio")}             Start MCP server ${dim("(stdio, explicit)")}`,
+			`  ${c("green", "rodocsmcp")} ${c("yellow", "<TopicName>")}         Print docs for a topic`,
+			`  ${c("green", "rodocsmcp")} ${c("yellow", "--list")}              List all class and enum names`,
+			`  ${c("green", "rodocsmcp")} ${c("yellow", "--find <query>")}      Find closest API name`,
+			`  ${c("green", "rodocsmcp")} ${c("yellow", "--guide <path>")}      Fetch a guide by path`,
+			`  ${c("green", "rodocsmcp")} ${c("yellow", "--search-guide <q>")}  Search guides by keyword`,
+			`  ${c("green", "rodocsmcp")} ${c("yellow", "--github-token <t>")}  Authenticate GitHub requests`,
+			`  ${c("green", "rodocsmcp")} ${c("yellow", "--seed-fastflags")}    Seed FastFlags from MaximumADHD`,
+			`  ${c("green", "rodocsmcp")} ${c("yellow", "--help")} ${dim("| -h")}          Show this help`,
+			"",
+			bold("EXAMPLES"),
+			`  ${dim("$")} rodocsmcp Actor`,
+			`  ${dim("$")} rodocsmcp TweenService`,
+			`  ${dim("$")} rodocsmcp KeyCode`,
+			`  ${dim("$")} rodocsmcp --list`,
+			`  ${dim("$")} rodocsmcp --find tweenserv`,
+			`  ${dim("$")} rodocsmcp --search-guide "data store"`,
+			`  ${dim("$")} rodocsmcp --guide scripting/data/data-stores.md`,
+			`  ${dim("$")} rodocsmcp --seed-fastflags`,
+			"",
+		].join("\n"),
+	);
 }
+
 
 // ! Modes
 
@@ -481,15 +487,37 @@ export async function main(
     return;
   }
 
-  if (first === "--guide") {
-    const path = args[1];
-    if (path === undefined || path.trim() === "") {
-      process.stderr.write(`${c("red", "✖")} --guide requires a path argument.\n`);
-      process.exit(1);
-    }
-    await runGuideCli(path, githubToken);
-    return;
-  }
+	if (first === "--seed-fastflags") {
+		process.stderr.write(`${dim("Seeding FastFlags...")}\n`);
+		try {
+			const store = new LmdbStore();
+			await store.open();
+			const syncManager = createSyncStateManager(store);
+			const scraper = new FastFlagScraper(store, syncManager);
+			
+			// Using the provided MaximumADHD dump URL
+			const url = "https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/roblox/FastFlags.json";
+			const { added, updated } = await scraper.seed(url, githubToken);
+			
+			process.stdout.write(`${c("green", "✔")} Successfully seeded FastFlags: ${bold(String(added))} added, ${bold(String(updated))} updated.\n`);
+			await store.close();
+		} catch (err: unknown) {
+			process.stderr.write(`${c("red", "✖")} Failed to seed FastFlags: ${err instanceof Error ? err.message : String(err)}\n`);
+			process.exit(1);
+		}
+		return;
+	}
+
+	if (first === "--guide") {
+		const path = args[1];
+		if (path === undefined || path.trim() === "") {
+			process.stderr.write(`${c("red", "✖")} --guide requires a path argument.\n`);
+			process.exit(1);
+		}
+		await runGuideCli(path, githubToken);
+		return;
+	}
+
 
   if (first !== undefined) {
     await runTopicCli(first, githubToken);
