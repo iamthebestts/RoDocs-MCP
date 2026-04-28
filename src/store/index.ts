@@ -4,10 +4,12 @@
 
 import { LmdbStore } from "./lmdb-store.js";
 import { SyncStateManager } from "./sync-state.js";
+import { WriteQueue } from "./write-queue.js";
 
 export type { LmdbStoreOptions } from "./lmdb-store.js";
 export type { SyncState } from "./sync-state.js";
-export { LmdbStore, SyncStateManager };
+export type { WriteOp } from "./write-queue.js";
+export { LmdbStore, SyncStateManager, WriteQueue };
 
 /**
  * Factory function to create a store with default options
