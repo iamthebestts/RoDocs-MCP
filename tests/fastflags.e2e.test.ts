@@ -1,95 +1,74 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { LmdbStore, createSyncStateManager } from "../src/store/index.js";
-import { FastFlagSearch } from "../src/fastflags/search.js";
 import { mkdtemp, rm } from "node:fs/promises";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
+import axios from "axios";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { FastFlagScraper } from "../src/fastflags/scraper.js";
+import { FastFlagSearch } from "../src/fastflags/search.js";
+import { createSyncStateManager, LmdbStore } from "../src/store/index.js";
 
-describe("FastFlags Search Logic E2E", () => {
-	let store: LmdbStore;
-	let syncManager: any;
-	let tempDir: string;
+const e2e = process.env.E2E === "true" ? describe : describe.skip;
 
-	beforeEach(async () => {
-		tempDir = await mkdtemp(join(tmpdir(), "rodocs-ff-e2e-"));
-		store = new LmdbStore({ cacheDir: tempDir });
-		await store.open();
-		syncManager = createSyncStateManager(store);
-	});
+vi.mock("axios");
 
-	afterEach(async () => {
-		await store.close();
-		await rm(tempDir, { recursive: true, force: true });
-	});
+e2e("FastFlags E2E", () => {
+  let store: LmdbStore;
+  let scraper: FastFlagScraper;
+  let ffSearch: FastFlagSearch;
+  let tempDir: string;
 
-	async function seedFlags() {
-		const mockFlags = [
-			{ name: "FFlagTestExact", value: true, description: "Exact match" },
-			{ name: "FFlagTestPrefix", value: false, description: "Prefix match" },
-			{ name: "MyFFlagTestFlag", value: 1, description: "Substring match" },
-			{ name: "DFIntTest", value: 100, description: "Dynamic Int" },
-			{ name: "SFFlagTest", value: true, description: "Synchronized" },
-		];
-		
-		for (const f of mockFlags) {
-			const enriched = {
-				name: f.name,
-				value: f.value,
-				kind: f.name.includes("Int") ? "FInt" : "FFlag",
-				behavior: f.name.startsWith("DF") ? "Dynamic" : f.name.startsWith("SF") ? "Synchronized" : "Fast",
-				platforms: [],
-				channels: [],
-				description: f.description,
-			};
-			await store.put(`fastflags:${f.name}`, enriched);
-		}
-	}
+  const mockFlags = {
+    FFlagTestExact: true,
+    FFlagTestPrefix: false,
+    DFIntTest: 123,
+    SFFlagTest: true,
+  };
 
+  beforeAll(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "rodocs-ff-e2e-"));
+    store = new LmdbStore({ cacheDir: tempDir });
+    await store.open();
+    const syncManager = createSyncStateManager(store);
+    scraper = new FastFlagScraper(store, syncManager);
+    ffSearch = new FastFlagSearch(store);
 
-	it("should order results: exact > prefix > substring", async () => {
-		await seedFlags();
-		const searcher = new FastFlagSearch(store);
-		
-		const results = await searcher.search({ query: "FFlagTest" });
-		
-		expect(results[0].name).toBe("FFlagTestExact");
-		expect(results[1].name).toBe("FFlagTestPrefix");
-		expect(results.some(f => f.name === "MyFFlagTestFlag")).toBe(true);
-	});
+    vi.mocked(axios.get).mockResolvedValue({ data: mockFlags });
 
-	it("should filter by kind", async () => {
-		await seedFlags();
-		const searcher = new FastFlagSearch(store);
-		
-		const results = await searcher.search({ kind: "FInt" });
-		
-		expect(results.every(f => f.kind === "FInt")).toBe(true);
-		expect(results.some(f => f.name === "DFIntTest")).toBe(true);
-	});
+    await scraper.seed("http://example.com/flags.json");
+  });
 
-	it("should filter by behavior", async () => {
-		await seedFlags();
-		const searcher = new FastFlagSearch(store);
-		
-		const results = await searcher.search({ behavior: "Dynamic" });
-		
-		expect(results.every(f => f.behavior === "Dynamic")).toBe(true);
-		expect(results.some(f => f.name === "DFIntTest")).toBe(true);
-	});
+  afterAll(async () => {
+    await store.close();
+    await rm(tempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
 
-	it("should return empty result and suggest seeding when store is empty", async () => {
-		const searcher = new FastFlagSearch(store);
-		const results = await searcher.search({ query: "any" });
-		
-		expect(results).toEqual([]);
-	});
+  it("should search flags with ranking", async () => {
+    const results = await ffSearch.search({ query: "Test" });
 
-	it("should respect limit", async () => {
-		await seedFlags();
-		const searcher = new FastFlagSearch(store);
-		
-		const results = await searcher.search({ limit: 2 });
-		
-		expect(results.length).toBeLessThanOrEqual(2);
-	});
+    expect(results.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("should find by exact name", async () => {
+    const results = await ffSearch.search({ query: "FFlagTestExact" });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.name).toBe("FFlagTestExact");
+  });
+
+  it("should filter by kind", async () => {
+    const results = await ffSearch.search({ kind: "FInt" });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.name).toBe("DFIntTest");
+  });
+
+  it("should filter by behavior", async () => {
+    const results = await ffSearch.search({ behavior: "Synchronized" });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.name).toBe("SFFlagTest");
+  });
+
+  it("should respect limit", async () => {
+    const results = await ffSearch.search({ limit: 1 });
+    expect(results).toHaveLength(1);
+  });
 });

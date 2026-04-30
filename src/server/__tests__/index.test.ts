@@ -42,6 +42,7 @@ const serverState = vi.hoisted(() => {
 
   return {
     FakeMcpServer,
+    initIndexer: vi.fn(),
     warmUp: vi.fn(),
     scrapeIndex: vi.fn(),
     scrapeMany: vi.fn(),
@@ -69,6 +70,7 @@ vi.mock("../../scraper/guides.js", () => ({
 }));
 
 vi.mock("../../scraper/search.js", () => ({
+  initIndexer: serverState.initIndexer,
   search: serverState.search,
   searchGuides: serverState.searchGuides,
   warmUp: serverState.warmUp,
@@ -145,7 +147,10 @@ describe("server", () => {
       >;
     };
 
-    expect(server.options).toMatchObject({ name: "rodocsmcp", version: "1.0.0" });
+    expect(server.options).toMatchObject({
+      name: "rodocsmcp",
+      version: "1.0.0",
+    });
     expect([...server.tools.keys()]).toEqual([
       "get_api_reference",
       "get_many_api_references",
@@ -157,6 +162,7 @@ describe("server", () => {
       "get_code_samples",
       "compare_api_members",
       "get_api_changelog",
+      "roblox_fastflags",
     ]);
     expect(server.prompts.has("roblox-dev-assistant")).toBe(true);
   });
