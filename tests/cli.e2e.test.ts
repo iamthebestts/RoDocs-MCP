@@ -6,16 +6,34 @@ const CLI = "node dist/cli.js";
 // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping ANSI
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
-function run(args: string[], timeoutMs = 20_000) {
+type RunResult = ReturnType<typeof spawnSync>;
+
+const runCache = new Map<string, RunResult>();
+
+function run(args: string[], timeoutMs = 20_000): RunResult {
+  const key = JSON.stringify(args);
+  const cached = runCache.get(key);
+  if (cached) return cached;
+
   const [cmd, ...rest] = CLI.split(" ");
-  if (!cmd) {
-    throw new Error("Invalid CLI");
-  }
-  return spawnSync(cmd, [...rest, ...args], {
+  if (!cmd) throw new Error("Invalid CLI");
+
+  const result = spawnSync(cmd, [...rest, ...args], {
     encoding: "utf8",
     timeout: timeoutMs,
     env: { ...process.env },
   });
+
+  runCache.set(key, result);
+  return result;
+}
+
+function str(value: string | NodeJS.ArrayBufferView): string {
+  if (typeof value === "string") return value;
+
+  return Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString(
+    "utf8",
+  );
 }
 
 function stripAnsi(text: string): string {
@@ -23,71 +41,70 @@ function stripAnsi(text: string): string {
 }
 
 function extractFirstGuidePath(output: string): string | null {
-  const lines = stripAnsi(output)
-    .split("\n")
-    .map((line) => line.trim());
-
-  return lines.find((line) => /\.md$/i.test(line)) ?? null;
+  return (
+    stripAnsi(output)
+      .split("\n")
+      .map((l) => l.trim())
+      .find((l) => /\.md$/i.test(l)) ?? null
+  );
 }
 
 e2e("CLI e2e", { timeout: 30_000 }, () => {
-  it("exits 0 for a valid topic", () => {
-    const result = run(["DataStoreService"]);
-    expect(result.status).toBe(0);
+  it("DataStoreService: exits 0, prints class name and members section", () => {
+    const { status, stdout } = run(["DataStoreService"]);
+    const out = stripAnsi(str(stdout));
+    expect(status).toBe(0);
+    expect(out).toMatch(/DataStoreService/);
+    expect(out).toMatch(/method|member|property|GetDataStore/i);
   });
 
-  it("prints the requested class name", () => {
-    const result = run(["DataStoreService"]);
-    expect(stripAnsi(result.stdout)).toMatch(/DataStoreService/);
+  it("unknown topic: exits non-zero and writes to stderr", () => {
+    const { status, stderr } = run(["xXNotARealClassXx123"]);
+    expect(status).not.toBe(0);
+    expect(str(stderr).length).toBeGreaterThan(0);
   });
 
-  it("prints a methods or members section", () => {
-    const result = run(["DataStoreService"]);
-    expect(stripAnsi(result.stdout)).toMatch(/method|member|property|GetDataStore/i);
+  it("--find: exits 0 and returns closest match for 'datastore'", () => {
+    const { status, stdout } = run(["--find", "datastore"]);
+    const out = stripAnsi(str(stdout));
+    expect(status).toBe(0);
+    expect(out).toMatch(/Closest match/i);
+    expect(out).toMatch(/DataStore/i);
   });
 
-  it("unknown topic exits non-zero and prints an error", () => {
-    const result = run(["xXNotARealClassXx123"]);
-    expect(result.status).not.toBe(0);
-    expect(result.stderr.length).toBeGreaterThan(0);
-  });
-
-  it("--find returns a closest match", () => {
-    const result = run(["--find", "datastore"]);
-    expect(result.status).toBe(0);
-    expect(stripAnsi(result.stdout)).toMatch(/Closest match/i);
-    expect(stripAnsi(result.stdout)).toMatch(/DataStore/i);
-  });
-
-  it("--search-guide returns guide results", () => {
-    const result = run(["--search-guide", "save player data"]);
-    expect(result.status).toBe(0);
-    const out = stripAnsi(result.stdout);
+  it("--search-guide: exits 0 and returns guide results for 'save player data'", () => {
+    const { status, stdout } = run(["--search-guide", "save player data"]);
+    const out = stripAnsi(str(stdout));
+    expect(status).toBe(0);
     expect(out).toMatch(/GUIDES/i);
     expect(out).toMatch(/\.md|data|store|player/i);
   });
 
-  it("--guide can fetch a guide path from search results", () => {
+  it("--guide: fetches a guide from --search-guide path", () => {
     const searchResult = run(["--search-guide", "data store"]);
     expect(searchResult.status).toBe(0);
-    const path = extractFirstGuidePath(searchResult.stdout);
+
+    const path = extractFirstGuidePath(str(searchResult.stdout));
     expect(path).not.toBeNull();
 
-    const guideResult = run(["--guide", path ?? ""]);
-    expect(guideResult.status).toBe(0);
-    expect(stripAnsi(guideResult.stdout)).toMatch(/GUIDE:/i);
-    expect(stripAnsi(guideResult.stdout)).toMatch(/^(---|#)/m);
+    const { status, stdout } = run(["--guide", path ?? ""]);
+    const out = stripAnsi(str(stdout));
+    expect(status).toBe(0);
+    expect(out).toMatch(/GUIDE:/i);
+    expect(out).toMatch(/^(---|#)/m);
   });
 
-  it("empty guide-search query exits non-zero", () => {
-    const result = run(["--search-guide", ""]);
-    expect(result.status).not.toBe(0);
-    expect(result.stderr.length).toBeGreaterThan(0);
+  it("--search-guide with empty query: exits non-zero and writes to stderr", () => {
+    const { status, stderr } = run(["--search-guide", ""]);
+    expect(status).not.toBe(0);
+    expect(str(stderr).length).toBeGreaterThan(0);
   });
 
-  it("--list exits 0 and lists known classes", () => {
-    const result = run(["--list"]);
-    expect(result.status).toBe(0);
-    expect(stripAnsi(result.stdout)).toMatch(/DataStoreService|RunService|TweenService/);
+  it("--list: exits 0 and lists known classes", () => {
+    const { status, stdout } = run(["--list"]);
+    expect(status).toBe(0);
+    expect(stripAnsi(str(stdout))).toMatch(
+      /DataStoreService|RunService|TweenService/,
+    );
   });
 });

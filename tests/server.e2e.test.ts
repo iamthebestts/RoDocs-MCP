@@ -1,5 +1,5 @@
-import { spawn } from "node:child_process";
-import { beforeEach, describe, expect, it } from "vitest";
+import { type ChildProcess, spawn } from "node:child_process";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const e2e = process.env.E2E === "true" ? describe : describe.skip;
 
@@ -22,26 +22,33 @@ type ToolResult = {
   isError?: boolean;
 };
 
-function runServer(requests: JsonRpcRequest[], timeoutMs = 25_000): Promise<JsonRpcResponse[]> {
-  return new Promise((resolve, reject) => {
-    const proc = spawn("node", ["dist/cli.js", "--stdio"], {
+class McpClient {
+  private proc!: ChildProcess;
+  private pending = new Map<
+    number,
+    {
+      resolve: (v: JsonRpcResponse) => void;
+      reject: (e: unknown) => void;
+      timer: NodeJS.Timeout;
+    }
+  >();
+
+  private id = 0;
+  private buffer = "";
+
+  constructor() {
+    this.proc = spawn("node", ["dist/cli.js", "--stdio"], {
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env },
     });
+    if (!this.proc.stdout || !this.proc.stderr) {
+      throw new Error("process error");
+    }
 
-    const responses: JsonRpcResponse[] = [];
-    const pendingIds = new Set(requests.map((r) => r.id));
-    let buffer = "";
-
-    const timer = setTimeout(() => {
-      proc.kill();
-      reject(new Error(`Server timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-
-    proc.stdout.on("data", (chunk: Buffer) => {
-      buffer += chunk.toString("utf8");
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
+    this.proc.stdout.on("data", (chunk: Buffer) => {
+      this.buffer += chunk.toString("utf8");
+      const lines = this.buffer.split("\n");
+      this.buffer = lines.pop() ?? "";
 
       for (const line of lines) {
         const trimmed = line.trim();
@@ -50,52 +57,52 @@ function runServer(requests: JsonRpcRequest[], timeoutMs = 25_000): Promise<Json
         try {
           const msg = JSON.parse(trimmed) as JsonRpcResponse;
           if (msg.id !== undefined) {
-            responses.push(msg);
-            pendingIds.delete(msg.id);
-            if (pendingIds.size === 0) {
-              clearTimeout(timer);
-              proc.kill();
-              resolve(responses);
+            const pending = this.pending.get(msg.id);
+            if (pending) {
+              clearTimeout(pending.timer);
+              this.pending.delete(msg.id);
+              pending.resolve(msg);
             }
           }
         } catch {}
       }
     });
 
-    proc.stderr.on("data", (chunk: Buffer) => {
+    this.proc.stderr.on("data", (chunk: Buffer) => {
       process.stderr.write(chunk);
     });
 
-    proc.on("error", (err) => {
-      clearTimeout(timer);
-      reject(err);
+    this.proc.on("error", (err) => {
+      process.stderr.write(`MCP Client Process Error: ${err}\n`);
     });
+  }
 
-    for (const req of requests) {
-      proc.stdin.write(`${JSON.stringify(req)}\n`);
-    }
-    proc.stdin.end();
-  });
-}
+  async call(method: string, params?: unknown, timeoutMs = 15_000): Promise<JsonRpcResponse> {
+    const requestId = ++this.id;
+    const req: JsonRpcRequest = {
+      jsonrpc: "2.0",
+      id: requestId,
+      method,
+      params,
+    };
 
-let id = 0;
+    return new Promise((resolve, reject) => {
+      if (!this.proc.stdin) {
+        throw new Error("process error");
+      }
+      const timer = setTimeout(() => {
+        this.pending.delete(requestId);
+        reject(new Error(`Request ${method} (id: ${requestId}) timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
 
-function nextId(): number {
-  id += 1;
-  return id;
-}
+      this.pending.set(requestId, { resolve, reject, timer });
+      this.proc.stdin.write(`${JSON.stringify(req)}\n`);
+    });
+  }
 
-async function call(method: string, params?: unknown): Promise<JsonRpcResponse> {
-  const requestId = nextId();
-  const [res] = await runServer([{ jsonrpc: "2.0", id: requestId, method, params }]);
-  if (res === undefined) throw new Error("No response received");
-  return res;
-}
-
-async function callTool(name: string, args: Record<string, unknown>): Promise<ToolResult> {
-  const res = await call("tools/call", { name, arguments: args });
-  expect(res.error).toBeUndefined();
-  return res.result as ToolResult;
+  async stop() {
+    this.proc.kill();
+  }
 }
 
 function parseText<T>(result: ToolResult): T {
@@ -103,9 +110,25 @@ function parseText<T>(result: ToolResult): T {
 }
 
 e2e("server e2e", () => {
-  beforeEach(() => {
-    id = 0;
+  let client!: McpClient;
+
+  beforeAll(() => {
+    client = new McpClient();
   });
+
+  afterAll(async () => {
+    await client.stop();
+  });
+
+  async function call(method: string, params?: unknown) {
+    return client.call(method, params);
+  }
+
+  async function callTool(name: string, args: Record<string, unknown>): Promise<ToolResult> {
+    const res = await call("tools/call", { name, arguments: args });
+    expect(res.error).toBeUndefined();
+    return res.result as ToolResult;
+  }
 
   it("responds with serverInfo", async () => {
     const res = await call("initialize", {
@@ -385,42 +408,23 @@ e2e("server e2e", () => {
   });
 
   it("handles 3 parallel tool calls and returns all ids", async () => {
-    const responses = await runServer([
-      {
-        jsonrpc: "2.0",
-        id: 100,
-        method: "tools/call",
-        params: {
-          name: "get_api_reference",
-          arguments: { topic: "TweenService" },
-        },
-      },
-      {
-        jsonrpc: "2.0",
-        id: 101,
-        method: "tools/call",
-        params: {
-          name: "find_api_name",
-          arguments: { query: "remote event" },
-        },
-      },
-      {
-        jsonrpc: "2.0",
-        id: 102,
-        method: "tools/call",
-        params: {
-          name: "list_api_names",
-          arguments: {},
-        },
-      },
+    const [res1, res2, res3] = await Promise.all([
+      call("tools/call", {
+        name: "get_api_reference",
+        arguments: { topic: "TweenService" },
+      }),
+      call("tools/call", {
+        name: "find_api_name",
+        arguments: { query: "remote event" },
+      }),
+      call("tools/call", {
+        name: "list_api_names",
+        arguments: {},
+      }),
     ]);
-    expect(responses).toHaveLength(3);
-    const ids = new Set(responses.map((r) => r.id));
-    expect(ids.has(100)).toBe(true);
-    expect(ids.has(101)).toBe(true);
-    expect(ids.has(102)).toBe(true);
-    for (const r of responses) {
-      expect(r.error).toBeUndefined();
-    }
+
+    expect(res1.error).toBeUndefined();
+    expect(res2.error).toBeUndefined();
+    expect(res3.error).toBeUndefined();
   });
 });
