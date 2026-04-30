@@ -132,18 +132,26 @@ export async function searchGuides(query: string, githubToken?: string): Promise
     .map(({ entry }) => entry);
 }
 
-export async function fetchGuide(path: string, githubToken?: string): Promise<GuideResult> {
+export async function fetchGuide(path: string, githubToken?: string): Promise<GuideResult | null> {
   const cached = guideCache.get(path);
   if (cached !== undefined) return cached;
 
   const url = `${RAW_BASE}${path}`;
-  const { data: markdown } = await http.get<string>(url, {
-    headers: buildGithubHeaders({ Accept: "text/plain" }, githubToken),
-  });
+  try {
+    const { data: markdown } = await http.get<string>(url, {
+      headers: buildGithubHeaders({ Accept: "text/plain" }, githubToken),
+    });
 
-  const result: GuideResult = { path, markdown };
-  guideCache.set(path, result);
-  hydrateFrontmatter(path, markdown);
+    const result: GuideResult = { path, markdown };
+    guideCache.set(path, result);
+    hydrateFrontmatter(path, markdown);
 
-  return result;
+    return result;
+  } catch (err) {
+    if (axios.isAxiosError(err) && err.response?.status === 404) {
+      console.error(`[fetchGuide] 404 for path: ${path} at URL: ${url}`);
+      return null;
+    }
+    throw err;
+  }
 }

@@ -154,10 +154,8 @@ export class BM25 {
   }): void {
     this.docs = data.docs;
     this.avgDocLength = data.avgDocLength;
-    
-    this.termFreqs = new Map(
-      data.termFreqs.map(([term, postings]) => [term, new Map(postings)]),
-    );
+
+    this.termFreqs = new Map(data.termFreqs.map(([term, postings]) => [term, new Map(postings)]));
     this.idfScores = new Map(data.idfScores);
     this.docLengths = new Map(data.docLengths);
   }

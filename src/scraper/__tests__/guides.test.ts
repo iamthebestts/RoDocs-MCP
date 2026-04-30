@@ -146,9 +146,10 @@ Body`,
     const first = await fetchGuide("tutorials/save-player-data.md");
     const second = await fetchGuide("tutorials/save-player-data.md");
 
+    expect(first).not.toBeNull();
     expect(first).toBe(second);
-    expect(first.path).toBe("tutorials/save-player-data.md");
-    expect(first.markdown).toContain("# Save Player Data");
+    expect(first?.path).toBe("tutorials/save-player-data.md");
+    expect(first?.markdown).toContain("# Save Player Data");
     expect(entries[0]?.title).toBe("Save Player Data");
     expect(entries[0]?.description).toBe("How to save player data");
     expect(axiosState.get).toHaveBeenCalledTimes(2);
