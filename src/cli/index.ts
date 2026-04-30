@@ -14,6 +14,7 @@ import { fetchGuide, searchGuides } from "../scraper/guides.js";
 import { findClosestApiName, scrapeIndex, scrapeTopic } from "../scraper/index.js";
 import { createServer } from "../server/index.js";
 import { createSyncStateManager, LmdbStore } from "../store/index.js";
+import { Indexer } from "../store/indexer.js";
 import { parseGithubTokenArgs } from "../utils/github-token.js";
 
 const W = 76;
@@ -500,12 +501,10 @@ export async function main(
       const store = new LmdbStore();
       await store.open();
       const syncManager = createSyncStateManager(store);
-      const scraper = new FastFlagScraper(store, syncManager);
+      const indexer = new Indexer(store, syncManager);
+      const scraper = new FastFlagScraper(store, syncManager, indexer);
 
-      // Using the provided MaximumADHD dump URL
-      const url =
-        "https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/roblox/FastFlags.json";
-      const { added, updated } = await scraper.seed(url, githubToken);
+      const { added, updated } = await scraper.seed(githubToken);
 
       process.stdout.write(
         `${c("green", "✔")} Successfully seeded FastFlags: ${bold(String(added))} added, ${bold(String(updated))} updated.\n`,

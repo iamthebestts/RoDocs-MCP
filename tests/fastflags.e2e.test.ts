@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { FastFlagScraper } from "../src/fastflags/scraper.js";
 import { FastFlagSearch } from "../src/fastflags/search.js";
 import { createSyncStateManager, LmdbStore } from "../src/store/index.js";
+import { Indexer } from "../src/store/indexer.js";
 
 const e2e = process.env.E2E === "true" ? describe : describe.skip;
 
@@ -29,12 +30,24 @@ e2e("FastFlags E2E", () => {
     store = new LmdbStore({ cacheDir: tempDir });
     await store.open();
     const syncManager = createSyncStateManager(store);
-    scraper = new FastFlagScraper(store, syncManager);
+    const indexer = new Indexer(store, syncManager);
+    scraper = new FastFlagScraper(store, syncManager, indexer);
     ffSearch = new FastFlagSearch(store);
 
-    vi.mocked(axios.get).mockResolvedValue({ data: mockFlags });
+    vi.mocked(axios.get)
+      .mockResolvedValueOnce({
+        data: [
+          {
+            name: "Test.json",
+            type: "file",
+            download_url: "http://example.com/Test.json",
+            sha: "sha1",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ data: mockFlags });
 
-    await scraper.seed("http://example.com/flags.json");
+    await scraper.seed();
   });
 
   afterAll(async () => {

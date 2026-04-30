@@ -598,7 +598,6 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
           kind: f.kind,
           behavior: f.behavior,
           platforms: f.platforms,
-          channels: f.channels,
           source: "MaximumADHD",
         }));
 

@@ -3,7 +3,9 @@ import type { FastFlag, FastFlagBehavior, FastFlagKind } from "./parser.js";
 /**
  * Enriches a FastFlag by infering its kind and behavior from its name.
  */
-export function enrichFastFlag(flag: FastFlag): FastFlag {
+export function enrichFastFlag(
+  flag: Omit<FastFlag, "kind" | "behavior" | "valuesByTarget">,
+): FastFlag {
   const name = flag.name;
   let kind: FastFlagKind = "Unknown";
   let behavior: FastFlagBehavior = "Unknown";
@@ -20,12 +22,7 @@ export function enrichFastFlag(flag: FastFlag): FastFlag {
     kind = "FString";
   } else if (name.startsWith("FLog") || name.startsWith("DFLog") || name.startsWith("SFLog")) {
     kind = "FLog";
-  } else if (
-    name.startsWith("FFlag") ||
-    name.startsWith("DFFlag") ||
-    name.startsWith("SFFlag") ||
-    name.startsWith("FBoolean")
-  ) {
+  } else if (name.startsWith("FFlag") || name.startsWith("DFFlag") || name.startsWith("SFFlag")) {
     kind = "FFlag";
   }
 
@@ -45,6 +42,7 @@ export function enrichFastFlag(flag: FastFlag): FastFlag {
 
   return {
     ...flag,
+    valuesByTarget: undefined,
     kind,
     behavior,
   };

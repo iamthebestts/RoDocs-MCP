@@ -1,14 +1,16 @@
-export type FastFlagKind = "FFlag" | "FInt" | "FString" | "FLog" | "FBoolean" | "Unknown";
+export type FastFlagKind = "FFlag" | "FInt" | "FString" | "FLog" | "Unknown";
 export type FastFlagBehavior = "Fast" | "Dynamic" | "Synchronized" | "Unknown";
 
 export interface FastFlag {
   name: string;
-  value: string | number | boolean;
+  value: string | number | boolean | undefined;
+  valuesByTarget: Record<string, string | number | boolean> | undefined;
   kind: FastFlagKind;
   behavior: FastFlagBehavior;
   platforms: string[];
-  channels: string[];
-  description: string | undefined;
+  targets: string[];
+  sources: Array<{ target: string; url: string; sha?: string }>;
+  description?: string | undefined;
 }
 export interface RawFastFlag {
   name: string;
@@ -20,14 +22,12 @@ export interface RawFastFlag {
 /**
  * Normalizes raw flag data into a standard FastFlag format.
  */
-export function normalizeFastFlag(raw: RawFastFlag): FastFlag {
+export function normalizeFastFlag(
+  raw: RawFastFlag,
+): Omit<FastFlag, "kind" | "behavior" | "platforms" | "targets" | "sources" | "valuesByTarget"> {
   return {
     name: raw.name,
     value: raw.value,
-    kind: "Unknown", // Will be filled by enricher
-    behavior: "Unknown", // Will be filled by enricher
-    platforms: [],
-    channels: [],
     description: raw.description,
   };
 }

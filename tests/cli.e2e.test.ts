@@ -31,9 +31,7 @@ function run(args: string[], timeoutMs = 20_000): RunResult {
 function str(value: string | NodeJS.ArrayBufferView): string {
   if (typeof value === "string") return value;
 
-  return Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString(
-    "utf8",
-  );
+  return Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString("utf8");
 }
 
 function stripAnsi(text: string): string {
@@ -103,8 +101,6 @@ e2e("CLI e2e", { timeout: 30_000 }, () => {
   it("--list: exits 0 and lists known classes", () => {
     const { status, stdout } = run(["--list"]);
     expect(status).toBe(0);
-    expect(stripAnsi(str(stdout))).toMatch(
-      /DataStoreService|RunService|TweenService/,
-    );
+    expect(stripAnsi(str(stdout))).toMatch(/DataStoreService|RunService|TweenService/);
   });
 });
