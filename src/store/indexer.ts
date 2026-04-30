@@ -1,92 +1,86 @@
-import { encode, decode } from "@msgpack/msgpack";
-import { LmdbStore } from "./lmdb-store.js";
-import { SyncStateManager } from "./sync-state.js";
-import { BM25 } from "../scraper/bm25.js";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { decode, encode } from "@msgpack/msgpack";
+import type { BM25, BM25Doc } from "../scraper/bm25.js";
+import type { LmdbStore, SyncStateManager } from "./index.js";
 
-export interface IndexerOptions {
-	/**
-	 * Key prefix for the index in LMDB
-	 */
-	indexPrefix?: string;
+interface SerializedIndex {
+  termFreqs: [string, [string, number][]][];
+  idfScores: [string, number][];
+  docLengths: [string, number][];
+  avgDocLength: number;
+  docs: readonly BM25Doc[];
 }
 
 /**
- * Handles persistence and loading of the BM25 index.
+ * Service for persisting and restoring the BM25 index.
  */
 export class Indexer {
-	private readonly indexPrefix: string;
+  private readonly basePath: string;
 
-	constructor(
-		private readonly store: LmdbStore,
-		private readonly syncManager: SyncStateManager,
-		options: IndexerOptions = {}
-	) {
-		this.indexPrefix = options.indexPrefix ?? "idx:bm25:";
-	}
+  constructor(
+    readonly _store: LmdbStore,
+    readonly _syncManager: SyncStateManager,
+  ) {
+    this.basePath = join(_store.getPath().replace(/store\.lmdb$/, ""), "");
+  }
 
-	/**
-	 * Generates a version key for the index based on the source state.
-	 */
-	private async getVersionKey(sourceKey: string): Promise<string> {
-		const state = await this.syncManager.getSourceState(sourceKey);
-		
-		// Priority: commitSha > etag > fallback
-		const version = state?.commitSha || state?.etag || "v1";
-		return `${this.indexPrefix}${sourceKey}:${version}`;
-	}
+  private getIndexPath(source: string): string {
+    return join(this.basePath, `${source}.index.msgpack`);
+  }
 
-	/**
-	 * Saves the serialized BM25 index to the store.
-	 */
-	async saveIndex(sourceKey: string, bm25: BM25): Promise<void> {
-		const key = await this.getVersionKey(sourceKey);
-		const data = bm25.serialize();
-		const packed = encode(data);
-		
-		await this.store.put(key, packed);
-	}
+  async save(bm25: BM25, source: string): Promise<void> {
+    const path = this.getIndexPath(source);
+    const data = bm25.serialize();
+    const packed = encode(data);
 
-	/**
-	 * Loads a persisted index if it exists and is valid.
-	 */
-	async loadIndex(sourceKey: string, bm25: BM25): Promise<{ restored: boolean; error?: string }> {
-		try {
-			const key = await this.getVersionKey(sourceKey);
-			const packed = await this.store.get<Uint8Array>(key);
-			
-			if (!packed) {
-				return { restored: false };
-			}
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, packed);
+  }
 
-			const data = decode(packed);
-			bm25.restore(data);
-			
-			return { restored: true };
-		} catch (error) {
-			return { 
-				restored: false, 
-				error: `Failed to restore index: ${error instanceof Error ? error.message : String(error)}` 
-			};
-		}
-	}
+  async load(bm25: BM25, source: string): Promise<boolean> {
+    const path = this.getIndexPath(source);
+    try {
+      const packed = await readFile(path);
+      const data = decode(packed) as SerializedIndex;
 
-	/**
-	 * High-level method to either restore the index or build it.
-	 */
-	async loadOrBuildIndex(
-		sourceKey: string, 
-		bm25: BM25, 
-		buildFn: () => Promise<void>
-	): Promise<void> {
-		const { restored, error } = await this.loadIndex(sourceKey, bm25);
-		
-		if (error) {
-			console.warn(`[Indexer] ${error}. Rebuilding index...`);
-		}
+      if (
+        !data.termFreqs ||
+        !data.idfScores ||
+        !data.docLengths ||
+        data.avgDocLength === undefined ||
+        !data.docs
+      ) {
+        return false;
+      }
 
-		if (!restored) {
-			await buildFn();
-			await this.saveIndex(sourceKey, bm25);
-		}
-	}
+      bm25.restore(data);
+      return true;
+    } catch (_error) {
+      // File not found or corrupted
+      return false;
+    }
+  }
+
+  /**
+   * Deletes the persisted index.
+   */
+  async clear(source: string): Promise<void> {
+    try {
+      await writeFile(this.getIndexPath(source), "");
+    } catch (_error) {
+      // Ignore
+    }
+  }
+
+  /**
+   * High-level helper to load from cache or build and save.
+   */
+  async loadOrBuildIndex(_source: string, bm25: BM25, builder: () => Promise<void>): Promise<void> {
+    const loaded = await this.load(bm25, _source);
+    if (loaded) return;
+
+    await builder();
+    await this.save(bm25, _source);
+  }
 }

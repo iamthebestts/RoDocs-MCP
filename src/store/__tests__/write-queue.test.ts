@@ -87,8 +87,8 @@ describe("WriteQueue", () => {
     // Trigger flush
     try {
       await queue.flush();
-    } catch (e) {
-      expect(e.message).toContain("Flush failed, operations re-queued");
+    } catch (e: unknown) {
+      expect((e as Error).message).toContain("Flush failed, operations re-queued");
     }
 
     // Value should not be in store
