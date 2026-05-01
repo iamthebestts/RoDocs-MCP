@@ -130,4 +130,5 @@ export interface SearchResult {
   readonly category?: string;
   readonly title?: string;
   readonly description?: string;
+  readonly isDuplicate?: boolean;
 }

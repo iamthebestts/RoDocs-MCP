@@ -4,8 +4,10 @@ import { fetchGuideIndex } from "../scraper/guides.js";
 import type { LmdbStore, SyncStateManager } from "../store/index.js";
 import { Indexer } from "../store/indexer.js";
 import type { BM25Doc, SearchOptions, SearchResult } from "../types/index.js";
-import { resolveAliases, resolveLuauSynonyms } from "./aliases.js";
+import { expandQuery, resolveAliases, resolveLuauSynonyms } from "./aliases.js";
 import { BM25 } from "./bm25.js";
+import { findClosestMatch } from "./fuzzy.js";
+import { applyRecencyBoost, type RecencyConfig } from "./recency.js";
 
 const apiBM25 = new BM25();
 const guideBM25 = new BM25();
@@ -27,6 +29,54 @@ let guideScoreThreshold = GUIDE_SCORE_THRESHOLD;
  */
 export function initIndexer(store: LmdbStore, syncManager: SyncStateManager): void {
   indexer = new Indexer(store, syncManager);
+}
+
+function uniqueByName(results: readonly SearchResult[]): readonly SearchResult[] {
+  const byName = new Map<string, SearchResult>();
+  for (const result of results) {
+    const existing = byName.get(result.name);
+    if (existing === undefined || result.score > existing.score) {
+      byName.set(result.name, result);
+    }
+  }
+  return [...byName.values()].sort((a, b) => b.score - a.score);
+}
+
+function applyQueryExpansion(
+  bm25: BM25,
+  query: string,
+  limit: number,
+  mapper: (result: { id: string; score: number }) => SearchResult,
+): readonly SearchResult[] {
+  const results = expandQuery(query).flatMap((variant) => bm25.search(variant, limit).map(mapper));
+  return uniqueByName(results).slice(0, limit);
+}
+
+function projectApiResult(name: string, score: number): SearchResult {
+  const category = apiCategories.get(name);
+  return {
+    type: "api",
+    name,
+    path: category === "enum" ? `enums/${name}` : `classes/${name}`,
+    score,
+    ...(category ? { category } : {}),
+  };
+}
+
+function findExactApiName(query: string): string | undefined {
+  const normalized = query.toLowerCase().replace(/\s+/g, "");
+  return [...apiCategories.keys()].find((name) => name.toLowerCase() === normalized);
+}
+
+export function sortByRecency<T extends SearchResult & { ageDays?: number | undefined }>(
+  results: readonly T[],
+  config: RecencyConfig = {},
+): readonly T[] {
+  return [...results].sort((a, b) => {
+    const left = applyRecencyBoost(a.score, a.ageDays ?? 0, config);
+    const right = applyRecencyBoost(b.score, b.ageDays ?? 0, config);
+    return right - left;
+  });
 }
 
 function buildApiIndex(githubToken?: string): Promise<void> {
@@ -109,20 +159,18 @@ export async function searchApis(
 ): Promise<readonly SearchResult[]> {
   await buildApiIndex(githubToken);
 
-  return apiBM25
-    .search(query, limit)
-    .filter((r) => r.score >= API_SCORE_THRESHOLD)
-    .map((r): SearchResult => {
-      const category = apiCategories.get(r.id);
+  const exact = findExactApiName(query);
+  const results = uniqueByName([
+    ...(exact !== undefined ? [projectApiResult(exact, 100)] : []),
+    ...applyQueryExpansion(apiBM25, query, limit, (r) => projectApiResult(r.id, r.score)),
+  ]).filter((r) => r.score >= API_SCORE_THRESHOLD);
 
-      return {
-        type: "api",
-        name: r.id,
-        path: category === "enum" ? `enums/${r.id}` : `classes/${r.id}`,
-        score: r.score,
-        ...(category ? { category } : {}),
-      };
-    });
+  if (results.length > 0) return results;
+
+  const closest = findClosestMatch(query, [...apiCategories.keys()]);
+  if (closest === null) return [];
+
+  return [projectApiResult(closest, API_SCORE_THRESHOLD)];
 }
 
 export async function searchApisLocal(query: string, limit = 10): Promise<readonly SearchResult[]> {
@@ -131,20 +179,13 @@ export async function searchApisLocal(query: string, limit = 10): Promise<readon
   }
   if (apiBM25.indexedCount === 0) return [];
 
-  return apiBM25
-    .search(query, limit)
+  const exact = findExactApiName(query);
+  return uniqueByName([
+    ...(exact !== undefined ? [projectApiResult(exact, 100)] : []),
+    ...applyQueryExpansion(apiBM25, query, limit, (r) => projectApiResult(r.id, r.score)),
+  ])
     .filter((r) => r.score >= API_SCORE_THRESHOLD)
-    .map((r): SearchResult => {
-      const category = apiCategories.get(r.id);
-
-      return {
-        type: "api",
-        name: r.id,
-        path: category === "enum" ? `enums/${r.id}` : `classes/${r.id}`,
-        score: r.score,
-        ...(category ? { category } : {}),
-      };
-    });
+    .slice(0, limit);
 }
 
 export async function searchGuides(
@@ -156,23 +197,46 @@ export async function searchGuides(
 
   const resolvedQuery = resolveLuauSynonyms(query);
 
-  return guideBM25
-    .search(resolvedQuery, limit)
-    .filter((r) => r.score >= guideScoreThreshold)
-    .map((r): SearchResult => {
-      const meta = guideMetaById.get(r.id);
-      const category = meta?.category ?? r.id.split("/")[0] ?? "unknown";
+  const results = applyQueryExpansion(guideBM25, resolvedQuery, limit, (r): SearchResult => {
+    const meta = guideMetaById.get(r.id);
+    const category = meta?.category ?? r.id.split("/")[0] ?? "unknown";
 
-      return {
-        type: "guide",
-        name: r.id,
-        path: r.id,
-        score: r.score,
-        category,
-        ...(meta?.title ? { title: meta.title } : {}),
-        ...(meta?.description ? { description: meta.description } : {}),
-      };
-    });
+    return {
+      type: "guide",
+      name: r.id,
+      path: r.id,
+      score: r.score,
+      category,
+      ...(meta?.title ? { title: meta.title } : {}),
+      ...(meta?.description ? { description: meta.description } : {}),
+    };
+  }).filter((r) => r.score >= guideScoreThreshold);
+
+  if (results.length > 0) return results;
+
+  const candidates = [...guideMetaById.values()].flatMap((meta) => [meta.path, meta.title]);
+  const closest = findClosestMatch(
+    resolvedQuery,
+    candidates.filter((candidate) => candidate.length > 0),
+  );
+  if (closest === null) return [];
+
+  const meta = [...guideMetaById.values()].find(
+    (entry) => entry.path === closest || entry.title === closest,
+  );
+  if (meta === undefined) return [];
+
+  return [
+    {
+      type: "guide",
+      name: meta.path,
+      path: meta.path,
+      score: guideScoreThreshold,
+      category: meta.category,
+      ...(meta.title ? { title: meta.title } : {}),
+      ...(meta.description ? { description: meta.description } : {}),
+    },
+  ];
 }
 
 export async function searchGuidesLocal(
@@ -186,23 +250,22 @@ export async function searchGuidesLocal(
 
   const resolvedQuery = resolveLuauSynonyms(query);
 
-  return guideBM25
-    .search(resolvedQuery, limit)
-    .filter((r) => r.score >= guideScoreThreshold)
-    .map((r): SearchResult => {
-      const meta = guideMetaById.get(r.id);
-      const category = meta?.category ?? r.id.split("/")[0] ?? "unknown";
+  return applyQueryExpansion(guideBM25, resolvedQuery, limit, (r): SearchResult => {
+    const meta = guideMetaById.get(r.id);
+    const category = meta?.category ?? r.id.split("/")[0] ?? "unknown";
 
-      return {
-        type: "guide",
-        name: r.id,
-        path: r.id,
-        score: r.score,
-        category,
-        ...(meta?.title ? { title: meta.title } : {}),
-        ...(meta?.description ? { description: meta.description } : {}),
-      };
-    });
+    return {
+      type: "guide",
+      name: r.id,
+      path: r.id,
+      score: r.score,
+      category,
+      ...(meta?.title ? { title: meta.title } : {}),
+      ...(meta?.description ? { description: meta.description } : {}),
+    };
+  })
+    .filter((r) => r.score >= guideScoreThreshold)
+    .slice(0, limit);
 }
 
 export async function search(

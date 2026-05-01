@@ -8,6 +8,7 @@ const mockFetchIndex = vi.hoisted(() =>
       "MemoryStoreHashMap",
       "DataStoreService",
       "DataStore",
+      "PathfindingService",
       "TweenService",
       "RemoteEvent",
       "RunService",
@@ -84,6 +85,7 @@ import {
   searchApisLocal,
   searchGuides,
   searchGuidesLocal,
+  sortByRecency,
   warmUp,
 } from "../index.js";
 
@@ -135,6 +137,21 @@ describe("search", () => {
       for (const r of results) {
         expect(r.type).toBe("api");
       }
+    });
+
+    it("expands aliases before BM25 search", async () => {
+      const results = await search("ds", { limit: 10, types: ["api"] });
+      const names = results.map((r) => r.name);
+
+      expect(names).toContain("DataStore");
+      expect(names).toContain("DataStoreService");
+      expect(names.length).toBeGreaterThan(1);
+    });
+
+    it("uses fuzzy fallback when BM25 returns no results", async () => {
+      const results = await search("PathfindngService", { limit: 5, types: ["api"] });
+
+      expect(results[0]?.name).toBe("PathfindingService");
     });
   });
 
@@ -208,6 +225,28 @@ describe("search", () => {
           expect(current.score).toBeGreaterThanOrEqual(next.score);
         }
       }
+    });
+
+    it("can sort post-BM25 results with recency boost", () => {
+      const results = sortByRecency(
+        [
+          {
+            type: "guide",
+            name: "old",
+            score: 10,
+            ageDays: 365,
+          },
+          {
+            type: "guide",
+            name: "new",
+            score: 8,
+            ageDays: 0,
+          },
+        ],
+        { halfLifeDays: 365, minMultiplier: 0.1 },
+      );
+
+      expect(results[0]?.name).toBe("new");
     });
   });
 

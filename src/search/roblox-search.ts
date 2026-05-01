@@ -4,7 +4,9 @@ import { FastFlagSearch } from "../fastflags/search.js";
 import type { LmdbStore } from "../store/index.js";
 import type { BM25Doc, SearchResult } from "../types/index.js";
 import { BM25 } from "./bm25.js";
+import { markDuplicates } from "./dedup.js";
 import { searchApisLocal, searchGuidesLocal } from "./index.js";
+import { applyRecencyBoost } from "./recency.js";
 
 export const ROBLOX_SEARCH_SOURCES = ["all", "docs", "guides", "fastflags", "devforum"] as const;
 
@@ -24,6 +26,9 @@ export interface FastFlagSearchResult {
   behavior: string;
   platforms: string[];
   description?: string | undefined;
+  score: number;
+  title?: string | undefined;
+  isDuplicate?: boolean | undefined;
 }
 
 export interface DevForumSearchResult {
@@ -33,6 +38,7 @@ export interface DevForumSearchResult {
   tags: string[];
   score: number;
   source: string;
+  isDuplicate?: boolean | undefined;
   contentSnippet?: string | undefined;
   acceptedAnswerSnippet?: string | undefined;
 }
@@ -66,10 +72,12 @@ function shouldSearch(requested: RobloxSearchSource, source: Exclude<RobloxSearc
 function projectFastFlag(flag: FastFlag): FastFlagSearchResult {
   return {
     name: flag.name,
+    title: flag.name,
     value: flag.value,
     kind: flag.kind,
     behavior: flag.behavior,
     platforms: flag.platforms,
+    score: 1,
     ...(flag.description ? { description: flag.description } : {}),
   };
 }
@@ -94,6 +102,10 @@ function projectDevForum(record: DevForumRecord): DevForumSearchResult {
       ? { acceptedAnswerSnippet: snippet(record.acceptedAnswer) }
       : {}),
   };
+}
+
+function ageDays(record: DevForumRecord): number {
+  return Math.max(0, (Date.now() - record.lastSyncAt) / 86_400_000);
 }
 
 async function searchDevForum(
@@ -129,9 +141,23 @@ async function searchDevForum(
 
   return bm25
     .search(query, limit)
-    .map((result) => byId.get(result.id))
-    .filter((record): record is DevForumRecord => record !== undefined)
-    .map(projectDevForum);
+    .map((result) => {
+      const record = byId.get(result.id);
+      return record === undefined
+        ? undefined
+        : {
+            record,
+            boostedScore: applyRecencyBoost(result.score, ageDays(record), {
+              halfLifeDays: 365,
+              minMultiplier: 0.5,
+            }),
+          };
+    })
+    .filter(
+      (entry): entry is { record: DevForumRecord; boostedScore: number } => entry !== undefined,
+    )
+    .sort((a, b) => b.boostedScore - a.boostedScore)
+    .map((entry) => projectDevForum(entry.record));
 }
 
 export async function robloxSearch(
@@ -175,11 +201,18 @@ export async function robloxSearch(
     }
   }
 
+  const deduped = markDuplicates(results);
+
   return {
     query: options.query,
     source,
     limit,
-    results,
+    results: {
+      docs: deduped.docs ?? [],
+      guides: deduped.guides ?? [],
+      fastflags: deduped.fastflags ?? [],
+      devforum: deduped.devforum ?? [],
+    },
     ...(messages.length > 0 ? { messages } : {}),
   };
 }

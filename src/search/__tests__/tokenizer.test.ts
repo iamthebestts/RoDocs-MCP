@@ -90,4 +90,14 @@ describe("tokenize", () => {
       expect(result).toEqual(unique);
     });
   });
+
+  describe("stemming", () => {
+    it("adds stems when enabled", () => {
+      expect(tokenize("animating", { useStemming: true })).toContain("animate");
+    });
+
+    it("does not add stems by default", () => {
+      expect(tokenize("animating")).not.toContain("animate");
+    });
+  });
 });

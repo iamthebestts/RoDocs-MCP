@@ -50,7 +50,7 @@ export class BM25 {
         const raw = doc.fields[field];
         if (raw === undefined || raw.length === 0) continue;
 
-        const tokens = tokenize(raw);
+        const tokens = tokenize(raw, { useStemming: true });
         const weight = FIELD_WEIGHTS[field];
         const fieldLength = tokens.length * weight;
         docLength += fieldLength;
@@ -86,7 +86,7 @@ export class BM25 {
   }
 
   search(query: string, limit = 10): readonly BM25Result[] {
-    const queryTokens = tokenize(query);
+    const queryTokens = tokenize(query, { useStemming: true });
     if (queryTokens.length === 0) return [];
 
     const scores = new Map<string, number>();

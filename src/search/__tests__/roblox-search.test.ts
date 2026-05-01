@@ -227,4 +227,36 @@ describe("robloxSearch", () => {
     expect(result.results.devforum[0]?.contentSnippet).toMatch(/\.\.\.$/);
     expect(result.results.devforum[0]).not.toHaveProperty("acceptedAnswerSnippet");
   });
+
+  it("marks duplicate titles across grouped sources without removing results", async () => {
+    searchState.searchApisLocal.mockResolvedValue([
+      {
+        type: "api",
+        name: "DataStoreService",
+        title: "Data Store Guide",
+        score: 20,
+      },
+    ]);
+    searchState.searchGuidesLocal.mockResolvedValue([
+      {
+        type: "guide",
+        name: "cloud-services/data-stores.md",
+        path: "cloud-services/data-stores.md",
+        title: "Data Store Guide",
+        score: 10,
+        category: "cloud-services",
+      },
+    ]);
+
+    const result = await robloxSearch(asStore(new MemoryStore()), {
+      query: "DataStore",
+      source: "all",
+      limit: 10,
+    });
+
+    expect(result.results.docs).toHaveLength(1);
+    expect(result.results.guides).toHaveLength(1);
+    expect(result.results.docs[0]?.isDuplicate).toBeUndefined();
+    expect(result.results.guides[0]?.isDuplicate).toBe(true);
+  });
 });

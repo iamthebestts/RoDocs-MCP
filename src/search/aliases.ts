@@ -1,8 +1,8 @@
-const ALIASES = {
+export const ROBLOX_ALIASES: Record<string, string[]> = {
   // DataStore
-  datastore: ["DataStoreService"],
+  datastore: ["DataStore", "DataStoreService", "GlobalDataStore"],
   "data store": ["DataStoreService"],
-  ds: ["DataStoreService"],
+  ds: ["DataStore", "DataStoreService", "GlobalDataStore"],
   datastoreservice: ["DataStoreService"],
   "ordered datastore": ["OrderedDataStore"],
   globalstore: ["GlobalDataStore"],
@@ -15,6 +15,7 @@ const ALIASES = {
   memorysortedmap: ["MemoryStoreSortedMap"],
 
   // Remotes
+  remote: ["RemoteEvent", "RemoteFunction", "UnreliableRemoteEvent"],
   remoteevent: ["RemoteEvent"],
   "remote event": ["RemoteEvent"],
   remotefunction: ["RemoteFunction"],
@@ -26,12 +27,12 @@ const ALIASES = {
   unreliableremote: ["UnreliableRemoteEvent"],
 
   // Tween
-  tween: ["TweenService", "Tween"],
+  tween: ["TweenService", "Tween", "TweenInfo"],
   tweenservice: ["TweenService"],
   tweeninfo: ["TweenInfo"],
 
   // Pathfinding
-  pathfinding: ["PathfindingService"],
+  pathfinding: ["PathfindingService", "Path", "PathWaypoint"],
   pathfindingservice: ["PathfindingService"],
   navmesh: ["PathfindingService"],
 
@@ -67,18 +68,20 @@ const ALIASES = {
 
   // Humanoid
   humanoid: ["Humanoid"],
-  character: ["Humanoid"],
+  character: ["Character", "Humanoid", "HumanoidRootPart"],
+  char: ["Character", "Humanoid", "HumanoidRootPart"],
   health: ["Humanoid"],
   walkspeed: ["Humanoid"],
 
   // BasePart
   basepart: ["BasePart"],
-  part: ["BasePart", "Part"],
+  part: ["BasePart", "MeshPart", "Part", "WedgePart", "SpawnLocation"],
   meshpart: ["MeshPart"],
   unionoperation: ["UnionOperation"],
   specialmesh: ["SpecialMesh"],
 
   // Physics
+  physics: ["PhysicsService", "CollisionGroup", "BasePart:ApplyImpulse"],
   bodyvelocity: ["BodyVelocity"],
   bodygyro: ["BodyGyro"],
   bodyposition: ["BodyPosition"],
@@ -87,13 +90,13 @@ const ALIASES = {
   hinge: ["HingeConstraint"],
 
   // Lighting
-  lighting: ["Lighting"],
+  lighting: ["Lighting", "Atmosphere", "Sky", "ColorCorrectionEffect"],
   sky: ["Sky"],
   atmosphere: ["Atmosphere"],
   bloom: ["BloomEffect"],
 
   // Sound
-  sound: ["Sound"],
+  sound: ["Sound", "SoundService", "SoundGroup"],
   soundservice: ["SoundService"],
 
   // Collections
@@ -112,10 +115,12 @@ const ALIASES = {
   textchat: ["TextChatService"],
 
   // Camera
-  camera: ["Camera"],
+  camera: ["Camera", "Workspace.CurrentCamera"],
+  cam: ["Camera", "Workspace.CurrentCamera"],
   viewport: ["Camera"],
 
   // GUI
+  gui: ["ScreenGui", "SurfaceGui", "BillboardGui", "GuiObject"],
   screengui: ["ScreenGui"],
   surfacegui: ["SurfaceGui"],
   billboardgui: ["BillboardGui"],
@@ -127,25 +132,54 @@ const ALIASES = {
   scrollingframe: ["ScrollingFrame"],
 
   // Animation
-  animation: ["Animation"],
+  animate: ["Animation", "AnimationTrack", "Animator"],
+  animation: ["Animation", "AnimationTrack", "Animator"],
   animator: ["Animator"],
   animationtrack: ["AnimationTrack"],
+
+  // Spatial queries
+  cframe: ["CFrame", "CoordinateFrame"],
+  raycast: ["Raycast", "RaycastParams", "RaycastResult", "workspace:Raycast"],
+
+  // Parallel Luau
+  parallel: ["Actor", "SharedTable", "task.desynchronize"],
 
   // Misc
   debris: ["Debris"],
   teams: ["Teams"],
   team: ["Team"],
-} as const satisfies Record<string, readonly string[]>;
-
-type AliasKey = keyof typeof ALIASES;
+};
 
 const NORMALIZED: ReadonlyMap<string, readonly string[]> = new Map<string, readonly string[]>(
-  (Object.keys(ALIASES) as AliasKey[]).map((key) => [key.toLowerCase(), ALIASES[key]]),
+  Object.entries(ROBLOX_ALIASES).map(([key, values]) => [key.toLowerCase(), values]),
 );
 
 export function resolveAliases(query: string): readonly string[] {
   const lower = query.toLowerCase().trim();
   return NORMALIZED.get(lower) ?? [];
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function expandQuery(query: string): string[] {
+  const trimmed = query.trim();
+  if (trimmed.length === 0) return [query];
+
+  const expanded = new Set<string>([query]);
+  const lower = trimmed.toLowerCase();
+
+  for (const [alias, replacements] of NORMALIZED) {
+    const pattern = new RegExp(`(^|\\s)${escapeRegex(alias)}(?=\\s|$)`, "i");
+    if (!pattern.test(lower)) continue;
+
+    for (const replacement of replacements) {
+      expanded.add(trimmed.replace(pattern, (_match, prefix: string) => `${prefix}${replacement}`));
+    }
+  }
+
+  return [...expanded];
 }
 
 // ! Luau synonyms

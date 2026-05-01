@@ -1,3 +1,5 @@
+import { stemWord } from "./stemmer.js";
+
 const STOPWORDS: ReadonlySet<string> = new Set([
   "a",
   "an",
@@ -65,6 +67,10 @@ const STOPWORDS: ReadonlySet<string> = new Set([
   "you",
 ]);
 
+export interface TokenizeOptions {
+  useStemming?: boolean | undefined;
+}
+
 /**
  * Splits a PascalCase or camelCase word into parts.
  *
@@ -81,22 +87,38 @@ function splitCamelCase(word: string): readonly string[] {
     .split(/\s+/);
 }
 
-export function tokenize(text: string): readonly string[] {
+function isCamelOrPascalCase(word: string): boolean {
+  return /[a-z\d][A-Z]/.test(word) || /[A-Z]+[A-Z][a-z]/.test(word);
+}
+
+function addToken(result: string[], seen: Set<string>, token: string): void {
+  const lower = token.toLowerCase();
+  if (lower.length < 2) return;
+  if (STOPWORDS.has(lower)) return;
+  if (seen.has(lower)) return;
+  seen.add(lower);
+  result.push(lower);
+}
+
+export function tokenize(text: string, options: TokenizeOptions = {}): readonly string[] {
   const words = text
     .replace(/[^a-zA-Z0-9\s_]/g, " ")
     .split(/[\s_]+/)
-    .flatMap(splitCamelCase);
+    .filter((word) => word.length > 0);
 
   const seen = new Set<string>();
   const result: string[] = [];
 
   for (const word of words) {
-    const lower = word.toLowerCase();
-    if (lower.length < 2) continue;
-    if (STOPWORDS.has(lower)) continue;
-    if (seen.has(lower)) continue;
-    seen.add(lower);
-    result.push(lower);
+    const shouldStem = options.useStemming === true && !isCamelOrPascalCase(word);
+    for (const part of splitCamelCase(word)) {
+      addToken(result, seen, part);
+      if (!shouldStem) continue;
+      const stem = stemWord(part);
+      if (stem !== part.toLowerCase()) {
+        addToken(result, seen, stem);
+      }
+    }
   }
 
   return result;
