@@ -200,18 +200,11 @@ export class DevForumPipeline {
       const numericWeight = CATEGORY_WEIGHT_TO_NUM[gc.weight];
 
       if (gc.weight !== "medium") {
-        const limit =
-          gc.weight === "gold"
-            ? CONFIG.perCategoryTopGold
-            : CONFIG.perCategoryTopHigh;
+        const limit = gc.weight === "gold" ? CONFIG.perCategoryTopGold : CONFIG.perCategoryTopHigh;
         discoveryTasks.push(async () => {
           await this.discoverySemaphore.acquire();
           try {
-            const topics = await this.fetcher.getCategoryTop(
-              gc.slug,
-              id,
-              "monthly",
-            );
+            const topics = await this.fetcher.getCategoryTop(gc.slug, id, "monthly");
             const source = `category-top:${gc.slug}`;
             for (const t of topics.slice(0, limit)) {
               if (!shouldRejectTopic(t, source)) {
@@ -231,9 +224,7 @@ export class DevForumPipeline {
       }
 
       const latestLimit =
-        gc.weight === "gold"
-          ? CONFIG.perCategoryLatestGold
-          : CONFIG.perCategoryLatestMedium;
+        gc.weight === "gold" ? CONFIG.perCategoryLatestGold : CONFIG.perCategoryLatestMedium;
       discoveryTasks.push(async () => {
         await this.discoverySemaphore.acquire();
         try {
@@ -279,10 +270,7 @@ export class DevForumPipeline {
       .map((c) => {
         const t = c.topic;
         const ageDays = t.created_at
-          ? Math.max(
-              0,
-              (Date.now() - new Date(t.created_at).getTime()) / 86_400_000,
-            )
+          ? Math.max(0, (Date.now() - new Date(t.created_at).getTime()) / 86_400_000)
           : 0;
         const recencyBoost = ageDays > 0 && ageDays < 365 ? 5 : 0;
         const acceptedBoost = t.has_accepted_answer ? 15 : 0;
@@ -294,17 +282,10 @@ export class DevForumPipeline {
           recencyBoost;
         return { ...c, scoreEstimate };
       })
-      .sort(
-        (a, b) =>
-          b.weight * 1000 +
-          b.scoreEstimate -
-          (a.weight * 1000 + a.scoreEstimate),
-      )
+      .sort((a, b) => b.weight * 1000 + b.scoreEstimate - (a.weight * 1000 + a.scoreEstimate))
       .slice(0, CONFIG.maxTopicsTotal);
 
-    const goldCount = GOLD_CATEGORIES.filter((g) =>
-      goldCategoryMap.has(g.slug),
-    ).length;
+    const goldCount = GOLD_CATEGORIES.filter((g) => goldCategoryMap.has(g.slug)).length;
     console.log(
       `[DevForum] discovery sources=top(${topPeriods.length})+cats(${goldCount}/${GOLD_CATEGORIES.length})+queries(${EXPANDED_QUERIES.length}) unique=${candidateTopics.size} after-prefilter=${uniqueTopics.length} capped=${CONFIG.maxTopicsTotal}`,
     );
@@ -412,8 +393,7 @@ export class DevForumPipeline {
       } catch (e) {
         lastErr = e;
         if (attempt === CONFIG.maxRetries || !isTransientError(e)) throw e;
-        const backoff =
-          CONFIG.retryBaseMs * 2 ** attempt + Math.floor(Math.random() * 200);
+        const backoff = CONFIG.retryBaseMs * 2 ** attempt + Math.floor(Math.random() * 200);
         await delay(backoff);
       }
     }

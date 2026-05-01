@@ -34,17 +34,12 @@ export function processTopic(
   const pushCode = (snippets: string[]) => {
     for (const s of snippets) {
       if (codeSet.size >= MAX_CODE_SNIPPETS) break;
-      const trimmed =
-        s.length > MAX_CODE_SNIPPET_LEN
-          ? `${s.slice(0, MAX_CODE_SNIPPET_LEN)}…`
-          : s;
+      const trimmed = s.length > MAX_CODE_SNIPPET_LEN ? `${s.slice(0, MAX_CODE_SNIPPET_LEN)}…` : s;
       if (trimmed.length > 0) codeSet.add(trimmed);
     }
   };
 
-  const { content: firstContent, code: firstCode } = cleanContent(
-    firstPost.cooked,
-  );
+  const { content: firstContent, code: firstCode } = cleanContent(firstPost.cooked);
   pushCode(firstCode);
 
   const acceptedPostNumber = topic.accepted_answer_post_number;
@@ -83,8 +78,7 @@ export function processTopic(
       views: topic.views,
       likes: topic.like_count,
       hasAcceptedAnswer: topic.has_accepted_answer,
-      hasStaffReply:
-        staffReplies.length > 0 || (acceptedAnswerPost?.staff ?? false),
+      hasStaffReply: staffReplies.length > 0 || (acceptedAnswerPost?.staff ?? false),
       hasCode,
       replyCount: topic.reply_count,
       ageDays,
@@ -121,9 +115,7 @@ function safeAgeDays(createdAt: string | undefined, topicId: number): number {
   }
   const ms = Date.now() - new Date(createdAt).getTime();
   if (Number.isNaN(ms)) {
-    console.warn(
-      `[DevForum] Invalid created_at="${createdAt}" for topic ${topicId}`,
-    );
+    console.warn(`[DevForum] Invalid created_at="${createdAt}" for topic ${topicId}`);
     return 0;
   }
   return ms / 86_400_000;

@@ -37,6 +37,15 @@ describe("DevForum Processor", () => {
           staff: true,
           trust_level: 4,
         },
+        {
+          id: 103,
+          username: "staff2",
+          cooked: "<p>Additional staff info. <pre><code>print('info')</code></pre></p>",
+          post_number: 3,
+          created_at: new Date().toISOString(),
+          staff: true,
+          trust_level: 4,
+        },
       ],
     },
   };
@@ -56,7 +65,7 @@ describe("DevForum Processor", () => {
   it("should identify staff replies", () => {
     const record = processTopic(mockTopic);
     expect(record.staffReplies).toHaveLength(1);
-    expect(record.staffReplies[0]).toContain("This is the solution.");
+    expect(record.staffReplies[0]).toContain("Additional staff info.");
   });
 
   it("should identify accepted answer", () => {

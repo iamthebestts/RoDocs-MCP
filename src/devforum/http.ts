@@ -1,6 +1,7 @@
 import http from "node:http";
 import https from "node:https";
 import axios from "axios";
+import type { RateLimiter } from "../scheduler/rate-limiter.js";
 
 const TOPIC_CONCURRENCY = 3;
 const REQUEST_TIMEOUT_MS = 15000;
@@ -31,3 +32,23 @@ export const devForumClient = axios.create({
   httpAgent,
   httpsAgent,
 });
+
+export function setupRateLimiter(rateLimiter: RateLimiter) {
+  devForumClient.interceptors.request.use(async (config) => {
+    await rateLimiter.acquire();
+    return config;
+  });
+
+  devForumClient.interceptors.response.use(
+    (response) => {
+      rateLimiter.resetBackoff();
+      return response;
+    },
+    (error) => {
+      if (error.response) {
+        rateLimiter.reportError(error.response.status);
+      }
+      return Promise.reject(error);
+    },
+  );
+}

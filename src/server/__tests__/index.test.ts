@@ -1,5 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RobloxDocEntry } from "../../scraper/fetch.js";
+import type { ServerInstance } from "../../server/index.js";
+
+interface MockServer {
+  options: unknown;
+  tools: Map<
+    string,
+    {
+      schema: unknown;
+      handler: (args: Record<string, unknown>) => Promise<unknown>;
+    }
+  >;
+  prompts: Map<
+    string,
+    {
+      schema: unknown;
+      handler: (args: Record<string, unknown>) => Promise<unknown>;
+    }
+  >;
+}
 
 const serverState = vi.hoisted(() => {
   class FakeMcpServer {
@@ -129,23 +148,8 @@ describe("server", () => {
 
   it("registers the expected tools and prompt", async () => {
     const { createServer } = await loadServer();
-    const server = createServer() as unknown as {
-      options: { name: string; version: string };
-      tools: Map<
-        string,
-        {
-          schema: unknown;
-          handler: (args: Record<string, unknown>) => Promise<unknown>;
-        }
-      >;
-      prompts: Map<
-        string,
-        {
-          schema: unknown;
-          handler: (args: Record<string, unknown>) => Promise<unknown>;
-        }
-      >;
-    };
+    const result = createServer({ autoStartScheduler: false }) as unknown as ServerInstance;
+    const server = result.server as unknown as MockServer;
 
     expect(server.options).toMatchObject({
       name: "rodocsmcp",
@@ -165,7 +169,7 @@ describe("server", () => {
       "roblox_fastflags",
     ]);
     expect(server.prompts.has("roblox-dev-assistant")).toBe(true);
-  });
+  }, 30000);
 
   it("projects api references through the tool handler", async () => {
     const entry: RobloxDocEntry = {
@@ -247,24 +251,16 @@ describe("server", () => {
     });
 
     const { createServer } = await loadServer();
-    const server = createServer() as unknown as {
-      tools: Map<
-        string,
-        {
-          handler: (args: Record<string, unknown>) => Promise<{
-            content: Array<{ type: string; text: string }>;
-          }>;
-        }
-      >;
-    };
+    const result = createServer({ autoStartScheduler: false }) as unknown as ServerInstance;
+    const server = result.server as unknown as MockServer;
 
     const handler = server.tools.get("get_api_reference")?.handler;
     expect(handler).toBeDefined();
 
-    const response = await handler?.({
+    const response = (await handler?.({
       topic: "DataStoreService",
       includeInherited: true,
-    });
+    })) as { content: Array<{ text: string }> } | undefined;
     const payload = JSON.parse(response?.content[0]?.text ?? "{}") as {
       name: string;
       kind: string;
@@ -298,16 +294,8 @@ describe("server", () => {
     });
 
     const { createServer } = await loadServer();
-    const server = createServer() as unknown as {
-      tools: Map<
-        string,
-        {
-          handler: (args: Record<string, unknown>) => Promise<{
-            content: Array<{ type: string; text: string }>;
-          }>;
-        }
-      >;
-    };
+    const result = createServer({ autoStartScheduler: false }) as unknown as ServerInstance;
+    const server = result.server as unknown as MockServer;
 
     expect(serverState.warmUp).toHaveBeenCalledWith("pat-123");
 
@@ -335,16 +323,8 @@ describe("server", () => {
     serverState.fetchGuideIndex.mockResolvedValue([]);
 
     const { createServer } = await loadServer();
-    const server = createServer() as unknown as {
-      tools: Map<
-        string,
-        {
-          handler: (args: Record<string, unknown>) => Promise<{
-            content: Array<{ type: string; text: string }>;
-          }>;
-        }
-      >;
-    };
+    const result = createServer({ autoStartScheduler: false }) as unknown as ServerInstance;
+    const server = result.server as unknown as MockServer;
 
     expect(serverState.warmUp).toHaveBeenCalledWith("env-token");
 

@@ -1,11 +1,15 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { setupRateLimiter } from "../devforum/http.js";
+import { DevForumPipeline } from "../devforum/pipeline.js";
+import { FastFlagScraper } from "../fastflags/scraper.js";
 import { FastFlagSearch } from "../fastflags/search.js";
+import { Scheduler } from "../scheduler/index.js";
 import type { RichMember, RobloxDocEntry } from "../scraper/fetch.js";
 import { fetchGuide, fetchGuideIndex } from "../scraper/guides.js";
 import { scrapeIndex, scrapeMany, scrapeTopic } from "../scraper/index.js";
 import { initIndexer, search, searchGuides, warmUp } from "../scraper/search.js";
-import { createSyncStateManager, LmdbStore } from "../store/index.js";
+import { createSyncStateManager, Indexer, LmdbStore } from "../store/index.js";
 import { parseGithubTokenArgs, resolveGithubToken } from "../utils/github-token.js";
 
 // ! AI projection types
@@ -139,6 +143,14 @@ const ROBLOX_DEV_ASSISTANT_PROMPT =
 
 export interface CreateServerOptions {
   githubToken?: string;
+  schedulerOptions?: { jobsOptional?: boolean };
+  autoStartScheduler?: boolean;
+}
+
+export interface ServerInstance {
+  server: McpServer;
+  scheduler: Scheduler;
+  shutdown: () => void;
 }
 
 function resolveServerGithubToken(options: CreateServerOptions): string | undefined {
@@ -149,7 +161,7 @@ function resolveServerGithubToken(options: CreateServerOptions): string | undefi
   return parseGithubTokenArgs(process.argv.slice(2)).githubToken;
 }
 
-export function createServer(options: CreateServerOptions = {}): McpServer {
+export function createServer(options: CreateServerOptions = {}): ServerInstance {
   const githubToken = resolveServerGithubToken(options);
 
   // Initialize LMDB Store for index persistence
@@ -159,12 +171,53 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
   initIndexer(store, syncManager);
   const ffSearch = new FastFlagSearch(store);
 
+  const scheduler = new Scheduler(options.schedulerOptions);
+  setupRateLimiter(scheduler.devForumRateLimiter);
+
   const server = new McpServer({
     name: "rodocsmcp",
     version: "1.0.0",
   });
 
   warmUp(githubToken);
+
+  const fastFlagScraper = new FastFlagScraper(store, syncManager, new Indexer(store, syncManager));
+  const devForumPipeline = new DevForumPipeline(
+    store,
+    syncManager,
+    new Indexer(store, syncManager),
+  );
+
+  scheduler.jobRunner.schedule({
+    name: "fastflags-update",
+    intervalMs: 24 * 60 * 60 * 1000,
+    task: async () => {
+      await fastFlagScraper.seed(githubToken);
+    },
+  });
+
+  scheduler.jobRunner.schedule({
+    name: "devforum-update",
+    intervalMs: 6 * 60 * 60 * 1000,
+    constraints: (now) => {
+      const utcHour = now.getUTCHours();
+      return utcHour < 14 || utcHour >= 22;
+    },
+    task: async () => {
+      const needsSync = await syncManager.needsSync("devforum", { maxAge: 6 * 60 * 60 * 1000 });
+      if (!needsSync) return;
+      await devForumPipeline.seed();
+    },
+  });
+
+  if (options.autoStartScheduler !== false) {
+    scheduler.start();
+  }
+
+  const shutdown = () => {
+    scheduler.stop();
+    store.close();
+  };
 
   server.registerTool(
     "get_api_reference",
@@ -190,6 +243,7 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
       },
     },
     async ({ topic, includeInherited }) => {
+      scheduler.recordActivity();
       const result = await scrapeTopic(topic, githubToken);
       return {
         content: [
@@ -224,6 +278,7 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
       },
     },
     async ({ topics, includeInherited }) => {
+      scheduler.recordActivity();
       const results = await scrapeMany(topics, githubToken);
       const projected = results.map((r) =>
         r.ok
@@ -256,6 +311,7 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
       inputSchema: {},
     },
     async () => {
+      scheduler.recordActivity();
       const result = await scrapeIndex(githubToken);
       return {
         content: [
@@ -281,6 +337,7 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
       },
     },
     async ({ query }) => {
+      scheduler.recordActivity();
       const results = await search(query, { types: ["api"], limit: 1 }, githubToken);
       const top = results[0];
       const payload =
@@ -314,6 +371,7 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
       },
     },
     async ({ query }) => {
+      scheduler.recordActivity();
       const results = await searchGuides(query, 10, githubToken);
       return {
         content: [
@@ -346,6 +404,7 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
       },
     },
     async ({ path }) => {
+      scheduler.recordActivity();
       const result = await fetchGuide(path, githubToken);
       if (!result) {
         return {
@@ -375,6 +434,7 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
       inputSchema: {},
     },
     async () => {
+      scheduler.recordActivity();
       const entries = await fetchGuideIndex(githubToken);
       return {
         content: [
@@ -402,6 +462,7 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
       },
     },
     async ({ topic }) => {
+      scheduler.recordActivity();
       const result = await scrapeTopic(topic, githubToken);
       return {
         content: [
@@ -430,6 +491,7 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
       },
     },
     async ({ topics }) => {
+      scheduler.recordActivity();
       const results = await scrapeMany(topics, githubToken);
 
       const memberSets = new Map<string, Set<string>>();
@@ -486,6 +548,7 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
       },
     },
     async ({ topic }) => {
+      scheduler.recordActivity();
       const result = await scrapeTopic(topic, githubToken);
       const cl = result.entry.class;
 
@@ -551,6 +614,7 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
 
   server.registerTool(
     "roblox_fastflags",
+
     {
       title: "Search Roblox FastFlags",
       description:
@@ -641,5 +705,5 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
     }),
   );
 
-  return server;
+  return { server, scheduler, shutdown };
 }

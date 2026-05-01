@@ -377,10 +377,19 @@ function printHelp(): void {
 // ! Modes
 
 async function runMcpServer(githubToken?: string): Promise<void> {
-  const server = githubToken ? createServer({ githubToken }) : createServer();
+  const { server, shutdown } = githubToken ? createServer({ githubToken }) : createServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
   process.stderr.write("rodocsmcp MCP server ready (stdio)\n");
+
+  process.on("SIGINT", () => {
+    shutdown();
+    process.exit(0);
+  });
+  process.on("SIGTERM", () => {
+    shutdown();
+    process.exit(0);
+  });
 }
 
 async function runTopicCli(topic: string, githubToken?: string): Promise<void> {

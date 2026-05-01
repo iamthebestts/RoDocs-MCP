@@ -69,9 +69,7 @@ export class DevForumFetcher {
   }
 
   async getCategoryLatest(slug: string, id: number): Promise<DevForumTopic[]> {
-    const response = await devForumClient.get(
-      `${BASE_URL}/c/${slug}/${id}/l/latest.json`,
-    );
+    const response = await devForumClient.get(`${BASE_URL}/c/${slug}/${id}/l/latest.json`);
     return this.mapTopics(response.data.topic_list?.topics ?? []);
   }
 
@@ -131,9 +129,7 @@ export class DevForumFetcher {
   }
 
   private async fetchTop(period: TopPeriod): Promise<DevForumTopic[]> {
-    const response = await devForumClient.get(
-      `${BASE_URL}${TOP_PATHS[period]}`,
-    );
+    const response = await devForumClient.get(`${BASE_URL}${TOP_PATHS[period]}`);
     return this.mapTopics(response.data.topic_list?.topics ?? []);
   }
 

@@ -14,7 +14,11 @@ const cliState = vi.hoisted(() => {
     connect,
     FakeTransport,
     createServer: vi.fn(() => ({
-      connect,
+      server: {
+        connect,
+      },
+      scheduler: {},
+      shutdown: vi.fn(),
     })),
     scrapeTopic: vi.fn(),
     scrapeIndex: vi.fn(),
