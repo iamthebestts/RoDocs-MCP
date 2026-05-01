@@ -6,6 +6,7 @@ import { searchDevForumStore } from "../devforum/search.js";
 import { FastFlagScraper } from "../fastflags/scraper.js";
 import { FastFlagSearch } from "../fastflags/search.js";
 import { Scheduler } from "../scheduler/index.js";
+import { SeedManager, type SeedSource } from "../scheduler/seed-manager.js";
 import type { RichMember, RobloxDocEntry } from "../scraper/fetch.js";
 import { fetchGuide, fetchGuideIndex } from "../scraper/guides.js";
 import { scrapeIndex, scrapeMany, scrapeTopic } from "../scraper/index.js";
@@ -152,7 +153,32 @@ export interface CreateServerOptions {
 export interface ServerInstance {
   server: McpServer;
   scheduler: Scheduler;
+  seedManager: SeedManager;
   shutdown: () => void;
+}
+
+const WARMING_HINTS: Record<SeedSource, string> = {
+  docs: "This source is still warming up. Results may be incomplete. Run --seed-docs for immediate full seed.",
+  guides:
+    "This source is still warming up. Results may be incomplete. Run --seed-guides for immediate full seed.",
+  fastflags:
+    "This source is still warming up. Results may be incomplete. Run --seed-fastflags for immediate full seed.",
+  devforum:
+    "This source is still warming up. Results may be incomplete. Run --seed-devforum for immediate full seed.",
+};
+
+function searchSources(source: (typeof ROBLOX_SEARCH_SOURCES)[number]): SeedSource[] {
+  if (source === "all") return ["docs", "guides", "fastflags", "devforum"];
+  return [source];
+}
+
+function warmingMetadata(seedManager: SeedManager, source: SeedSource) {
+  const progress = seedManager.getProgress(source);
+  return {
+    warming: progress.status !== "complete",
+    hint: WARMING_HINTS[source],
+    progress,
+  };
 }
 
 function resolveServerGithubToken(options: CreateServerOptions): string | undefined {
@@ -181,14 +207,57 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
     version: "1.0.0",
   });
 
-  warmUp(githubToken);
-
   const fastFlagScraper = new FastFlagScraper(store, syncManager, new Indexer(store, syncManager));
   const devForumPipeline = new DevForumPipeline(
     store,
     syncManager,
     new Indexer(store, syncManager),
   );
+  const seedManager = new SeedManager({
+    syncManager,
+    idleDetector: scheduler.idleDetector,
+    rateLimiters: {
+      devforum: scheduler.devForumRateLimiter,
+    },
+    runners: [
+      {
+        source: "docs",
+        estimatedTotal: 350,
+        batchSize: 50,
+        runBatch: async () => {
+          warmUp(githubToken);
+          return { processed: 50, done: true, logDetail: "50 paths" };
+        },
+      },
+      {
+        source: "guides",
+        estimatedTotal: 350,
+        batchSize: 50,
+        runBatch: async () => {
+          warmUp(githubToken);
+          return { processed: 50, done: true, logDetail: "50 paths" };
+        },
+      },
+      {
+        source: "fastflags",
+        estimatedTotal: 12,
+        batchSize: 3,
+        runBatch: async () => {
+          await fastFlagScraper.seed(githubToken);
+          return { processed: 3, done: true, needsRebuild: true, logDetail: "3 targets" };
+        },
+      },
+      {
+        source: "devforum",
+        estimatedTotal: 100,
+        batchSize: 20,
+        runBatch: async () => {
+          await devForumPipeline.seed();
+          return { processed: 20, done: true, needsRebuild: true, logDetail: "20 topics" };
+        },
+      },
+    ],
+  });
 
   scheduler.jobRunner.schedule({
     name: "fastflags-update",
@@ -212,11 +281,8 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
     },
   });
 
-  if (options.autoStartScheduler !== false) {
-    scheduler.start();
-  }
-
   const shutdown = () => {
+    seedManager.stop();
     scheduler.stop();
     store.close();
   };
@@ -340,6 +406,7 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
     },
     async ({ query }) => {
       scheduler.recordActivity();
+      seedManager.prioritize("docs");
       const results = await search(query, { types: ["api"], limit: 1 }, githubToken);
       const top = results[0];
       const payload =
@@ -374,6 +441,7 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
     },
     async ({ query }) => {
       scheduler.recordActivity();
+      seedManager.prioritize("guides");
       const results = await searchGuides(query, 10, githubToken);
       return {
         content: [
@@ -414,18 +482,46 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
     },
     async ({ query, source, limit }) => {
       scheduler.recordActivity();
+      for (const requestedSource of searchSources(source)) {
+        seedManager.prioritize(requestedSource);
+      }
       const result = await robloxSearch(store, {
         query,
         source,
         limit,
         githubToken,
       });
+      const warmingSources = searchSources(source).filter((requestedSource) => {
+        const values = result.results[requestedSource];
+        return (
+          values.length === 0 && seedManager.getProgress(requestedSource).status !== "complete"
+        );
+      });
+      const payload =
+        warmingSources.length > 0
+          ? {
+              ...result,
+              warming: true,
+              hints: Object.fromEntries(
+                warmingSources.map((requestedSource) => [
+                  requestedSource,
+                  WARMING_HINTS[requestedSource],
+                ]),
+              ),
+              progress: Object.fromEntries(
+                warmingSources.map((requestedSource) => [
+                  requestedSource,
+                  seedManager.getProgress(requestedSource),
+                ]),
+              ),
+            }
+          : result;
 
       return {
         content: [
           {
             type: "text" as const,
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(payload, null, 2),
           },
         ],
       };
@@ -469,16 +565,23 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
     },
     async (args) => {
       scheduler.recordActivity();
+      seedManager.prioritize("devforum");
       const result = await searchDevForumStore(store, args);
+      const payload =
+        result.results.length === 0
+          ? {
+              ...result,
+              ...warmingMetadata(seedManager, "devforum"),
+            }
+          : result;
 
       return {
         content: [
           {
             type: "text" as const,
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(payload, null, 2),
           },
         ],
-        ...(result.message && result.results.length === 0 ? { isError: true } : {}),
       };
     },
   );
@@ -742,6 +845,8 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
     },
     async (args) => {
       try {
+        scheduler.recordActivity();
+        seedManager.prioritize("fastflags");
         const flags = await ffSearch.search(args);
 
         if (flags.length === 0) {
@@ -749,7 +854,14 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
             content: [
               {
                 type: "text" as const,
-                text: "No FastFlags found matching the criteria. If the store is empty, please run the --seed-fastflags command first.",
+                text: JSON.stringify(
+                  {
+                    results: [],
+                    ...warmingMetadata(seedManager, "fastflags"),
+                  },
+                  null,
+                  2,
+                ),
               },
             ],
           };
@@ -804,5 +916,10 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
     }),
   );
 
-  return { server, scheduler, shutdown };
+  if (options.autoStartScheduler !== false) {
+    scheduler.start();
+    seedManager.startBackground();
+  }
+
+  return { server, scheduler, seedManager, shutdown };
 }

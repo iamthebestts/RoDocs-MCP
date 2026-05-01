@@ -70,8 +70,28 @@ const serverState = vi.hoisted(() => {
     searchGuides: vi.fn(),
     robloxSearch: vi.fn(),
     searchDevForumStore: vi.fn(),
+    fastFlagSearch: vi.fn(),
     fetchGuide: vi.fn(),
     fetchGuideIndex: vi.fn(),
+    stores: [] as Array<{
+      open: ReturnType<typeof vi.fn>;
+      close: ReturnType<typeof vi.fn>;
+      keys: ReturnType<typeof vi.fn>;
+      get: ReturnType<typeof vi.fn>;
+      put: ReturnType<typeof vi.fn>;
+      del: ReturnType<typeof vi.fn>;
+    }>,
+    syncManagers: [] as Array<{
+      getSourceState: ReturnType<typeof vi.fn>;
+      updateSourceState: ReturnType<typeof vi.fn>;
+      needsSync: ReturnType<typeof vi.fn>;
+    }>,
+    seedManagers: [] as Array<{
+      startBackground: ReturnType<typeof vi.fn>;
+      stop: ReturnType<typeof vi.fn>;
+      prioritize: ReturnType<typeof vi.fn>;
+      getProgress: ReturnType<typeof vi.fn>;
+    }>,
   };
 });
 
@@ -106,6 +126,68 @@ vi.mock("../../devforum/search.js", () => ({
   searchDevForumStore: serverState.searchDevForumStore,
 }));
 
+vi.mock("../../store/index.js", () => {
+  class FakeLmdbStore {
+    open = vi.fn(async () => {});
+    close = vi.fn();
+    keys = vi.fn(async () => []);
+    get = vi.fn(async () => null);
+    put = vi.fn(async () => {});
+    del = vi.fn(async () => {});
+
+    constructor() {
+      serverState.stores.push(this);
+    }
+  }
+
+  class FakeIndexer {}
+
+  function createSyncStateManager() {
+    const syncManager = {
+      getSourceState: vi.fn(async () => null),
+      updateSourceState: vi.fn(async () => {}),
+      needsSync: vi.fn(async () => true),
+    };
+    serverState.syncManagers.push(syncManager);
+    return syncManager;
+  }
+
+  return {
+    LmdbStore: FakeLmdbStore,
+    Indexer: FakeIndexer,
+    createSyncStateManager,
+  };
+});
+
+vi.mock("../../fastflags/search.js", () => {
+  class FakeFastFlagSearch {
+    search = serverState.fastFlagSearch;
+  }
+
+  return { FastFlagSearch: FakeFastFlagSearch };
+});
+
+vi.mock("../../scheduler/seed-manager.js", () => {
+  class FakeSeedManager {
+    startBackground = vi.fn();
+    stop = vi.fn();
+    prioritize = vi.fn();
+    getProgress = vi.fn((source: string) => ({
+      source,
+      status: "pending",
+      seededItems: 0,
+      estimatedTotal: 10,
+      percent: 0,
+    }));
+
+    constructor() {
+      serverState.seedManagers.push(this);
+    }
+  }
+
+  return { SeedManager: FakeSeedManager };
+});
+
 async function loadServer() {
   return import("../index.js");
 }
@@ -139,6 +221,10 @@ describe("server", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.resetModules();
+    serverState.seedManagers.length = 0;
+    serverState.stores.length = 0;
+    serverState.syncManagers.length = 0;
+    serverState.fastFlagSearch.mockResolvedValue([]);
     process.argv = [...originalArgv];
     if (originalGithubToken === undefined) {
       delete process.env.GITHUB_TOKEN;
@@ -183,6 +269,20 @@ describe("server", () => {
     ]);
     expect(server.prompts.has("roblox-dev-assistant")).toBe(true);
   }, 30000);
+
+  it("starts quickly with background seeding scheduled after registration", async () => {
+    const { createServer } = await loadServer();
+    const startedAt = performance.now();
+    const result = createServer() as unknown as ServerInstance;
+    const elapsedMs = performance.now() - startedAt;
+    const server = result.server as unknown as MockServer;
+
+    expect(elapsedMs).toBeLessThan(100);
+    expect(server.tools.size).toBeGreaterThan(0);
+    expect(serverState.seedManagers[0]?.startBackground).toHaveBeenCalledOnce();
+
+    result.shutdown();
+  });
 
   it("projects api references through the tool handler", async () => {
     const entry: RobloxDocEntry = {
@@ -292,7 +392,7 @@ describe("server", () => {
     expect(payload.codeSamples.length).toBeGreaterThan(0);
   });
 
-  it("uses --github-token for warm-up and tool handlers", async () => {
+  it("uses --github-token for tool handlers without eager warm-up", async () => {
     process.argv = ["node", "src/server/index.ts", "--github-token", "pat-123"];
 
     serverState.scrapeTopic.mockResolvedValue({
@@ -310,7 +410,7 @@ describe("server", () => {
     const result = createServer({ autoStartScheduler: false }) as unknown as ServerInstance;
     const server = result.server as unknown as MockServer;
 
-    expect(serverState.warmUp).toHaveBeenCalledWith("pat-123");
+    expect(serverState.warmUp).not.toHaveBeenCalled();
 
     await server.tools.get("get_api_reference")?.handler({
       topic: "Actor",
@@ -402,13 +502,14 @@ describe("server", () => {
       limit: 5,
     });
     expect(response?.isError).toBeUndefined();
+    expect(serverState.seedManagers[0]?.prioritize).toHaveBeenCalledWith("devforum");
     expect(JSON.parse(response?.content[0]?.text ?? "{}")).toMatchObject({
       query: "datastore",
       results: [{ title: "DataStore issue" }],
     });
   });
 
-  it("marks roblox_devforum empty local store responses as tool errors", async () => {
+  it("returns a warming hint for empty roblox_devforum local store responses", async () => {
     serverState.searchDevForumStore.mockResolvedValue({
       query: "datastore",
       results: [],
@@ -423,8 +524,17 @@ describe("server", () => {
       query: "datastore",
     })) as { content: Array<{ text: string }>; isError?: boolean } | undefined;
 
-    expect(response?.isError).toBe(true);
-    expect(response?.content[0]?.text).toContain("--seed-devforum");
+    const payload = JSON.parse(response?.content[0]?.text ?? "{}") as {
+      warming?: boolean;
+      hint?: string;
+      results?: unknown[];
+    };
+
+    expect(response?.isError).toBeUndefined();
+    expect(payload.results).toEqual([]);
+    expect(payload.warming).toBe(true);
+    expect(payload.hint).toContain("--seed-devforum");
+    expect(serverState.seedManagers[0]?.prioritize).toHaveBeenCalledWith("devforum");
   });
 
   it("falls back to GITHUB_TOKEN when no flag is present", async () => {
@@ -442,12 +552,32 @@ describe("server", () => {
     const result = createServer({ autoStartScheduler: false }) as unknown as ServerInstance;
     const server = result.server as unknown as MockServer;
 
-    expect(serverState.warmUp).toHaveBeenCalledWith("env-token");
+    expect(serverState.warmUp).not.toHaveBeenCalled();
 
     await server.tools.get("list_api_names")?.handler({});
     await server.tools.get("list_guides")?.handler({});
 
     expect(serverState.scrapeIndex).toHaveBeenCalledWith("env-token");
     expect(serverState.fetchGuideIndex).toHaveBeenCalledWith("env-token");
+  });
+
+  it("returns a warming hint and prioritizes fastflags when the local store is empty", async () => {
+    const { createServer } = await loadServer();
+    const result = createServer({ autoStartScheduler: false }) as unknown as ServerInstance;
+    const server = result.server as unknown as MockServer;
+
+    const response = (await server.tools.get("roblox_fastflags")?.handler({
+      query: "Debug",
+    })) as { content: Array<{ text: string }> } | undefined;
+    const payload = JSON.parse(response?.content[0]?.text ?? "{}") as {
+      results?: unknown[];
+      warming?: boolean;
+      hint?: string;
+    };
+
+    expect(payload.results).toEqual([]);
+    expect(payload.warming).toBe(true);
+    expect(payload.hint).toContain("--seed-fastflags");
+    expect(serverState.seedManagers[0]?.prioritize).toHaveBeenCalledWith("fastflags");
   });
 });
