@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { setupRateLimiter } from "../devforum/http.js";
 import { DevForumPipeline } from "../devforum/pipeline.js";
+import { searchDevForumStore } from "../devforum/search.js";
 import { FastFlagScraper } from "../fastflags/scraper.js";
 import { FastFlagSearch } from "../fastflags/search.js";
 import { Scheduler } from "../scheduler/index.js";
@@ -427,6 +428,57 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
             text: JSON.stringify(result, null, 2),
           },
         ],
+      };
+    },
+  );
+
+  server.registerTool(
+    "roblox_devforum",
+    {
+      title: "Search Curated Roblox DevForum Records",
+      description:
+        "Searches locally seeded curated DevForum technical records. Offline-only; does not call DevForum.",
+      inputSchema: {
+        query: z.string().min(1).describe("Technical query to search in local DevForum records."),
+        tags: z.array(z.string().min(1)).optional().describe("Optional required DevForum tags."),
+        requireAcceptedAnswer: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe("When true, only returns topics with an accepted answer."),
+        requireStaffReply: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe("When true, only returns topics with a staff reply."),
+        minScore: z
+          .number()
+          .min(0)
+          .max(100)
+          .optional()
+          .default(60)
+          .describe("Minimum curated quality score. Default: 60."),
+        limit: z
+          .number()
+          .min(1)
+          .max(25)
+          .optional()
+          .default(10)
+          .describe("Maximum number of results. Default: 10."),
+      },
+    },
+    async (args) => {
+      scheduler.recordActivity();
+      const result = await searchDevForumStore(store, args);
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+        ...(result.message && result.results.length === 0 ? { isError: true } : {}),
       };
     },
   );

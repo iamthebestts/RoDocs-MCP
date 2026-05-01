@@ -69,6 +69,7 @@ const serverState = vi.hoisted(() => {
     search: vi.fn(),
     searchGuides: vi.fn(),
     robloxSearch: vi.fn(),
+    searchDevForumStore: vi.fn(),
     fetchGuide: vi.fn(),
     fetchGuideIndex: vi.fn(),
   };
@@ -99,6 +100,10 @@ vi.mock("../../search/index.js", () => ({
 vi.mock("../../search/roblox-search.js", () => ({
   ROBLOX_SEARCH_SOURCES: ["all", "docs", "guides", "fastflags", "devforum"],
   robloxSearch: serverState.robloxSearch,
+}));
+
+vi.mock("../../devforum/search.js", () => ({
+  searchDevForumStore: serverState.searchDevForumStore,
 }));
 
 async function loadServer() {
@@ -168,6 +173,7 @@ describe("server", () => {
       "find_api_name",
       "search_guides",
       "roblox_search",
+      "roblox_devforum",
       "get_guide",
       "list_guides",
       "get_code_samples",
@@ -356,6 +362,69 @@ describe("server", () => {
         docs: [{ name: "DataStoreService" }],
       },
     });
+  });
+
+  it("routes roblox_devforum through the local DevForum search service", async () => {
+    serverState.searchDevForumStore.mockResolvedValue({
+      query: "datastore",
+      results: [
+        {
+          title: "DataStore issue",
+          url: "https://devforum.roblox.com/t/datastore/1",
+          tags: ["scripting"],
+          score: 90,
+          codeSnippets: [],
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          lastSeenAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+    });
+
+    const { createServer } = await loadServer();
+    const result = createServer({ autoStartScheduler: false }) as unknown as ServerInstance;
+    const server = result.server as unknown as MockServer;
+
+    const response = (await server.tools.get("roblox_devforum")?.handler({
+      query: "datastore",
+      tags: ["scripting"],
+      requireAcceptedAnswer: true,
+      requireStaffReply: false,
+      minScore: 70,
+      limit: 5,
+    })) as { content: Array<{ text: string }>; isError?: boolean } | undefined;
+
+    expect(serverState.searchDevForumStore).toHaveBeenCalledWith(expect.anything(), {
+      query: "datastore",
+      tags: ["scripting"],
+      requireAcceptedAnswer: true,
+      requireStaffReply: false,
+      minScore: 70,
+      limit: 5,
+    });
+    expect(response?.isError).toBeUndefined();
+    expect(JSON.parse(response?.content[0]?.text ?? "{}")).toMatchObject({
+      query: "datastore",
+      results: [{ title: "DataStore issue" }],
+    });
+  });
+
+  it("marks roblox_devforum empty local store responses as tool errors", async () => {
+    serverState.searchDevForumStore.mockResolvedValue({
+      query: "datastore",
+      results: [],
+      message: "No local DevForum records found. Run `npx rodocsmcp --seed-devforum`.",
+    });
+
+    const { createServer } = await loadServer();
+    const result = createServer({ autoStartScheduler: false }) as unknown as ServerInstance;
+    const server = result.server as unknown as MockServer;
+
+    const response = (await server.tools.get("roblox_devforum")?.handler({
+      query: "datastore",
+    })) as { content: Array<{ text: string }>; isError?: boolean } | undefined;
+
+    expect(response?.isError).toBe(true);
+    expect(response?.content[0]?.text).toContain("--seed-devforum");
   });
 
   it("falls back to GITHUB_TOKEN when no flag is present", async () => {
