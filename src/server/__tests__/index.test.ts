@@ -68,6 +68,7 @@ const serverState = vi.hoisted(() => {
     scrapeTopic: vi.fn(),
     search: vi.fn(),
     searchGuides: vi.fn(),
+    robloxSearch: vi.fn(),
     fetchGuide: vi.fn(),
     fetchGuideIndex: vi.fn(),
   };
@@ -93,6 +94,11 @@ vi.mock("../../scraper/search.js", () => ({
   search: serverState.search,
   searchGuides: serverState.searchGuides,
   warmUp: serverState.warmUp,
+}));
+
+vi.mock("../../search/roblox-search.js", () => ({
+  ROBLOX_SEARCH_SOURCES: ["all", "docs", "guides", "fastflags", "devforum"],
+  robloxSearch: serverState.robloxSearch,
 }));
 
 async function loadServer() {
@@ -161,6 +167,7 @@ describe("server", () => {
       "list_api_names",
       "find_api_name",
       "search_guides",
+      "roblox_search",
       "get_guide",
       "list_guides",
       "get_code_samples",
@@ -309,6 +316,46 @@ describe("server", () => {
     expect(serverState.scrapeTopic).toHaveBeenCalledWith("Actor", "pat-123");
     expect(serverState.search).toHaveBeenCalledWith("Act", { types: ["api"], limit: 1 }, "pat-123");
     expect(serverState.fetchGuide).toHaveBeenCalledWith("tutorials/save-player-data.md", "pat-123");
+  });
+
+  it("routes roblox_search through the grouped search service", async () => {
+    serverState.robloxSearch.mockResolvedValue({
+      query: "data store",
+      source: "all",
+      limit: 3,
+      results: {
+        docs: [{ type: "api", name: "DataStoreService", score: 10 }],
+        guides: [],
+        fastflags: [],
+        devforum: [],
+      },
+    });
+
+    const { createServer } = await loadServer();
+    const result = createServer({
+      autoStartScheduler: false,
+      githubToken: "pat-123",
+    }) as unknown as ServerInstance;
+    const server = result.server as unknown as MockServer;
+
+    const response = (await server.tools.get("roblox_search")?.handler({
+      query: "data store",
+      source: "all",
+      limit: 3,
+    })) as { content: Array<{ text: string }> } | undefined;
+
+    expect(serverState.robloxSearch).toHaveBeenCalledWith(expect.anything(), {
+      query: "data store",
+      source: "all",
+      limit: 3,
+      githubToken: "pat-123",
+    });
+    expect(JSON.parse(response?.content[0]?.text ?? "{}")).toMatchObject({
+      query: "data store",
+      results: {
+        docs: [{ name: "DataStoreService" }],
+      },
+    });
   });
 
   it("falls back to GITHUB_TOKEN when no flag is present", async () => {

@@ -76,7 +76,20 @@ vi.mock("../guides.js", () => ({
   searchGuides: vi.fn(),
 }));
 
-import { _resetIndexesForTesting, search, searchApis, searchGuides, warmUp } from "../search.js";
+import {
+  _resetIndexesForTesting,
+  initIndexer,
+  search,
+  searchApis,
+  searchApisLocal,
+  searchGuides,
+  searchGuidesLocal,
+  warmUp,
+} from "../search.js";
+
+function initMissingPersistedIndexer() {
+  initIndexer({ getPath: () => "C:/tmp/rodocs-missing-store/store.lmdb" } as never, {} as never);
+}
 
 describe("search", () => {
   beforeEach(() => {
@@ -220,6 +233,7 @@ describe("search", () => {
 describe("searchApis (direct)", () => {
   beforeEach(() => {
     _resetIndexesForTesting();
+    vi.clearAllMocks();
   });
 
   it("returns only api type results", async () => {
@@ -228,11 +242,38 @@ describe("searchApis (direct)", () => {
       expect(r.type).toBe("api");
     }
   });
+
+  it("local search returns empty without fetching when the index is cold", async () => {
+    const results = await searchApisLocal("RunService", 5);
+
+    expect(results).toEqual([]);
+    expect(mockFetchIndex).not.toHaveBeenCalled();
+  });
+
+  it("local search checks persisted API indexes without building remotely", async () => {
+    initMissingPersistedIndexer();
+
+    const results = await searchApisLocal("RunService", 5);
+
+    expect(results).toEqual([]);
+    expect(mockFetchIndex).not.toHaveBeenCalled();
+  });
+
+  it("local search uses an already-built API index", async () => {
+    await searchApis("RunService", 5);
+    vi.clearAllMocks();
+
+    const results = await searchApisLocal("RunService", 5);
+
+    expect(results.some((r) => r.name === "RunService")).toBe(true);
+    expect(mockFetchIndex).not.toHaveBeenCalled();
+  });
 });
 
 describe("searchGuides (direct)", () => {
   beforeEach(() => {
     _resetIndexesForTesting();
+    vi.clearAllMocks();
   });
 
   it("returns only guide type results", async () => {
@@ -240,6 +281,33 @@ describe("searchGuides (direct)", () => {
     for (const r of results) {
       expect(r.type).toBe("guide");
     }
+  });
+
+  it("local search returns empty without fetching when the guide index is cold", async () => {
+    const results = await searchGuidesLocal("save player data", 5);
+
+    expect(results).toEqual([]);
+    expect(mockFetchGuideIndex).not.toHaveBeenCalled();
+  });
+
+  it("local search checks persisted guide indexes without building remotely", async () => {
+    initMissingPersistedIndexer();
+
+    const results = await searchGuidesLocal("save player data", 5);
+
+    expect(results).toEqual([]);
+    expect(mockFetchGuideIndex).not.toHaveBeenCalled();
+  });
+
+  it("local search uses an already-built guide index", async () => {
+    _resetIndexesForTesting({ guideScoreThreshold: 0 });
+    await searchGuides("save player data", 5);
+    vi.clearAllMocks();
+
+    const results = await searchGuidesLocal("save player data", 5);
+
+    expect(results.some((r) => r.type === "guide")).toBe(true);
+    expect(mockFetchGuideIndex).not.toHaveBeenCalled();
   });
 
   describe("score threshold", () => {

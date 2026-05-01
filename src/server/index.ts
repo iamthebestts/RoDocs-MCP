@@ -9,6 +9,7 @@ import type { RichMember, RobloxDocEntry } from "../scraper/fetch.js";
 import { fetchGuide, fetchGuideIndex } from "../scraper/guides.js";
 import { scrapeIndex, scrapeMany, scrapeTopic } from "../scraper/index.js";
 import { initIndexer, search, searchGuides, warmUp } from "../scraper/search.js";
+import { ROBLOX_SEARCH_SOURCES, robloxSearch } from "../search/roblox-search.js";
 import { createSyncStateManager, Indexer, LmdbStore } from "../store/index.js";
 import { parseGithubTokenArgs, resolveGithubToken } from "../utils/github-token.js";
 
@@ -378,6 +379,52 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
           {
             type: "text" as const,
             text: JSON.stringify(results, null, 2),
+          },
+        ],
+      };
+    },
+  );
+
+  server.registerTool(
+    "roblox_search",
+    {
+      title: "Search Roblox Docs, Guides, FastFlags, and DevForum",
+      description:
+        "Searches Roblox docs, guides, local FastFlags, and local curated DevForum records. " +
+        "Results are grouped by source. FastFlags and DevForum are read from the local store only.",
+      inputSchema: {
+        query: z
+          .string()
+          .min(1)
+          .describe('Free-text query. E.g.: "data store", "FFlagDebug", "remote events"'),
+        source: z
+          .enum(ROBLOX_SEARCH_SOURCES)
+          .optional()
+          .default("all")
+          .describe("Optional source filter. Defaults to all."),
+        limit: z
+          .number()
+          .min(1)
+          .max(50)
+          .optional()
+          .default(10)
+          .describe("Maximum results per selected source. Default: 10."),
+      },
+    },
+    async ({ query, source, limit }) => {
+      scheduler.recordActivity();
+      const result = await robloxSearch(store, {
+        query,
+        source,
+        limit,
+        githubToken,
+      });
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(result, null, 2),
           },
         ],
       };

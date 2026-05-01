@@ -125,12 +125,64 @@ export async function searchApis(
     });
 }
 
+export async function searchApisLocal(query: string, limit = 10): Promise<readonly SearchResult[]> {
+  if (apiBM25.indexedCount === 0 && indexer) {
+    await indexer.load(apiBM25, "api");
+  }
+  if (apiBM25.indexedCount === 0) return [];
+
+  return apiBM25
+    .search(query, limit)
+    .filter((r) => r.score >= API_SCORE_THRESHOLD)
+    .map((r): SearchResult => {
+      const category = apiCategories.get(r.id);
+
+      return {
+        type: "api",
+        name: r.id,
+        path: category === "enum" ? `enums/${r.id}` : `classes/${r.id}`,
+        score: r.score,
+        ...(category ? { category } : {}),
+      };
+    });
+}
+
 export async function searchGuides(
   query: string,
   limit = 10,
   githubToken?: string,
 ): Promise<readonly SearchResult[]> {
   await buildGuideIndex(githubToken);
+
+  const resolvedQuery = resolveLuauSynonyms(query);
+
+  return guideBM25
+    .search(resolvedQuery, limit)
+    .filter((r) => r.score >= guideScoreThreshold)
+    .map((r): SearchResult => {
+      const meta = guideMetaById.get(r.id);
+      const category = meta?.category ?? r.id.split("/")[0] ?? "unknown";
+
+      return {
+        type: "guide",
+        name: r.id,
+        path: r.id,
+        score: r.score,
+        category,
+        ...(meta?.title ? { title: meta.title } : {}),
+        ...(meta?.description ? { description: meta.description } : {}),
+      };
+    });
+}
+
+export async function searchGuidesLocal(
+  query: string,
+  limit = 10,
+): Promise<readonly SearchResult[]> {
+  if (guideBM25.indexedCount === 0 && indexer) {
+    await indexer.load(guideBM25, "guides");
+  }
+  if (guideBM25.indexedCount === 0) return [];
 
   const resolvedQuery = resolveLuauSynonyms(query);
 
@@ -200,6 +252,7 @@ export function warmUp(githubToken?: string): void {
 }
 
 export function _resetIndexesForTesting(opts?: { guideScoreThreshold?: number }): void {
+  indexer = null;
   apiIndexing = null;
   guideIndexing = null;
   apiCategories.clear();

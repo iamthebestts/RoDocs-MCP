@@ -32,17 +32,17 @@ vi.mock("@modelcontextprotocol/sdk/server/stdio.js", () => ({
   StdioServerTransport: cliState.FakeTransport,
 }));
 
-vi.mock("../../server/index.js", () => ({
+vi.mock("../server/index.js", () => ({
   createServer: cliState.createServer,
 }));
 
-vi.mock("../../scraper/index.js", () => ({
+vi.mock("../scraper/index.js", () => ({
   scrapeTopic: cliState.scrapeTopic,
   scrapeIndex: cliState.scrapeIndex,
   findClosestApiName: cliState.findClosestApiName,
 }));
 
-vi.mock("../../scraper/guides.js", () => ({
+vi.mock("../scraper/guides.js", () => ({
   fetchGuide: cliState.fetchGuide,
   searchGuides: cliState.searchGuides,
 }));
@@ -83,7 +83,7 @@ function createEntry(name: string) {
 }
 
 async function loadCli() {
-  return import("../index.js");
+  return import("./index.js");
 }
 
 describe("cli", () => {
