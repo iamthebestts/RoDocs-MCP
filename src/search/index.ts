@@ -1,11 +1,11 @@
+import { fetchIndex } from "../scraper/fetch.js";
+import type { GuideMetadata } from "../scraper/guides.js";
+import { fetchGuideIndex } from "../scraper/guides.js";
 import type { LmdbStore, SyncStateManager } from "../store/index.js";
 import { Indexer } from "../store/indexer.js";
 import type { BM25Doc, SearchOptions, SearchResult } from "../types/index.js";
 import { resolveAliases, resolveLuauSynonyms } from "./aliases.js";
 import { BM25 } from "./bm25.js";
-import { fetchIndex } from "./fetch.js";
-import type { GuideMetadata } from "./guides.js";
-import { fetchGuideIndex } from "./guides.js";
 
 const apiBM25 = new BM25();
 const guideBM25 = new BM25();

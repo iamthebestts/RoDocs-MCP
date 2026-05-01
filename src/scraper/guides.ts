@@ -1,6 +1,6 @@
 import axios from "axios";
+import { resolveLuauSynonyms } from "../search/aliases.js";
 import { buildGithubHeaders } from "../utils/github-token.js";
-import { resolveLuauSynonyms } from "./aliases.js";
 import { MemoryCache } from "./cache.js";
 
 export interface GuideMetadata {

@@ -9,7 +9,7 @@ const searchState = vi.hoisted(() => ({
   searchGuidesLocal: vi.fn(),
 }));
 
-vi.mock("../../scraper/search.js", () => ({
+vi.mock("../index.js", () => ({
   searchApisLocal: searchState.searchApisLocal,
   searchGuidesLocal: searchState.searchGuidesLocal,
 }));

@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { decode, encode } from "@msgpack/msgpack";
-import type { BM25, BM25Doc } from "../scraper/bm25.js";
+import type { BM25, BM25Doc } from "../search/bm25.js";
 import type { LmdbStore, SyncStateManager } from "./index.js";
 
 interface SerializedIndex {

@@ -8,7 +8,7 @@ import { Scheduler } from "../scheduler/index.js";
 import type { RichMember, RobloxDocEntry } from "../scraper/fetch.js";
 import { fetchGuide, fetchGuideIndex } from "../scraper/guides.js";
 import { scrapeIndex, scrapeMany, scrapeTopic } from "../scraper/index.js";
-import { initIndexer, search, searchGuides, warmUp } from "../scraper/search.js";
+import { initIndexer, search, searchGuides, warmUp } from "../search/index.js";
 import { ROBLOX_SEARCH_SOURCES, robloxSearch } from "../search/roblox-search.js";
 import { createSyncStateManager, Indexer, LmdbStore } from "../store/index.js";
 import { parseGithubTokenArgs, resolveGithubToken } from "../utils/github-token.js";

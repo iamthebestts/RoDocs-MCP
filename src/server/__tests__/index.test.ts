@@ -89,7 +89,7 @@ vi.mock("../../scraper/guides.js", () => ({
   fetchGuideIndex: serverState.fetchGuideIndex,
 }));
 
-vi.mock("../../scraper/search.js", () => ({
+vi.mock("../../search/index.js", () => ({
   initIndexer: serverState.initIndexer,
   search: serverState.search,
   searchGuides: serverState.searchGuides,

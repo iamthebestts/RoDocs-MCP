@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { BM25 } from "../../scraper/bm25.js";
+import { BM25 } from "../../search/bm25.js";
 import { LmdbStore, SyncStateManager } from "../index.js";
 import { Indexer } from "../indexer.js";
 

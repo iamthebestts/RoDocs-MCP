@@ -1,10 +1,10 @@
 import type { DevForumRecord } from "../devforum/types.js";
 import type { FastFlag } from "../fastflags/parser.js";
 import { FastFlagSearch } from "../fastflags/search.js";
-import { BM25 } from "../scraper/bm25.js";
-import { searchApisLocal, searchGuidesLocal } from "../scraper/search.js";
 import type { LmdbStore } from "../store/index.js";
 import type { BM25Doc, SearchResult } from "../types/index.js";
+import { BM25 } from "./bm25.js";
+import { searchApisLocal, searchGuidesLocal } from "./index.js";
 
 export const ROBLOX_SEARCH_SOURCES = ["all", "docs", "guides", "fastflags", "devforum"] as const;
 

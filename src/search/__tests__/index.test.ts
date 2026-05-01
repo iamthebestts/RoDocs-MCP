@@ -64,13 +64,13 @@ const mockFetchGuideIndex = vi.hoisted(() =>
   ]),
 );
 
-vi.mock("../fetch.js", () => ({
+vi.mock("../../scraper/fetch.js", () => ({
   fetchIndex: mockFetchIndex,
   fetchTopic: vi.fn(),
   findClosestMatch: vi.fn(),
 }));
 
-vi.mock("../guides.js", () => ({
+vi.mock("../../scraper/guides.js", () => ({
   fetchGuideIndex: mockFetchGuideIndex,
   fetchGuide: vi.fn(),
   searchGuides: vi.fn(),
@@ -85,7 +85,7 @@ import {
   searchGuides,
   searchGuidesLocal,
   warmUp,
-} from "../search.js";
+} from "../index.js";
 
 function initMissingPersistedIndexer() {
   initIndexer({ getPath: () => "C:/tmp/rodocs-missing-store/store.lmdb" } as never, {} as never);
