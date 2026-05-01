@@ -16,6 +16,18 @@ export interface SyncState {
    */
   lastSyncAt?: number;
   /**
+   * Last bumped at for DevForum topics
+   */
+  lastBumpedAt?: string;
+  /**
+   * Topic count for DevForum sync
+   */
+  topicCount?: number;
+  /**
+   * Added topic count for DevForum sync
+   */
+  addedCount?: number;
+  /**
    * Git commit SHA when source was last fetched
    */
   commitSha?: string;

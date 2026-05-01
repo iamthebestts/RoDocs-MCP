@@ -525,12 +525,13 @@ export async function main(
       const store = new LmdbStore();
       await store.open();
       const syncManager = createSyncStateManager(store);
-      const pipeline = new DevForumPipeline(store, syncManager);
+      const indexer = new Indexer(store, syncManager);
+      const pipeline = new DevForumPipeline(store, syncManager, indexer);
 
-      const { added, rejected, scored } = await pipeline.seed();
+      const { added, lowScore, failed, rejected, bm25Invalidated } = await pipeline.seed();
 
       process.stdout.write(
-        `${c("green", "✔")} Successfully seeded DevForum content: ${bold(String(added))} added, ${bold(String(rejected))} filtered, ${bold(String(scored))} low score.\n`,
+        `${c("green", "✔")} Successfully seeded DevForum content: ${bold(String(added))} added, ${bold(String(rejected))} filtered, ${bold(String(lowScore))} low score, ${bold(String(failed))} failed. BM25 invalidated: ${String(bm25Invalidated)}.\n`,
       );
       await store.close();
     } catch (err: unknown) {

@@ -55,5 +55,6 @@ export interface DevForumRecord {
   codeSnippets: string[];
   tags: string[];
   score: number;
+  source: string;
   lastSyncAt: number;
 }

@@ -1,8 +1,7 @@
-import axios from "axios";
+import { devForumClient } from "./http.js";
 import type { DevForumTopic, DevForumTopicDetail } from "./types.js";
 
 const BASE_URL = "https://devforum.roblox.com";
-const RATE_LIMIT_DELAY = 1000; // 1 second between requests
 
 interface DiscoursePost {
   id: number;
@@ -48,36 +47,59 @@ interface DiscourseTopic {
   tags?: string[];
 }
 
+type TopPeriod = "monthly" | "yearly" | "all";
+
+const TOP_PATHS: Record<TopPeriod, string> = {
+  monthly: "/top/monthly.json",
+  yearly: "/top/yearly.json",
+  all: "/top/all.json",
+};
+
 export class DevForumFetcher {
-  private async wait(): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, RATE_LIMIT_DELAY));
+  async search(query: string): Promise<DevForumTopic[]> {
+    const response = await devForumClient.get(
+      `${BASE_URL}/search.json?q=${encodeURIComponent(query)}`,
+    );
+    return this.mapTopics(response.data.topics ?? []);
   }
 
-  async search(query: string): Promise<DevForumTopic[]> {
-    const url = `${BASE_URL}/search.json?q=${encodeURIComponent(query)}`;
-    const response = await axios.get(url);
+  async getCategories(): Promise<Record<string, unknown>[]> {
+    const response = await devForumClient.get(`${BASE_URL}/categories.json`);
+    return response.data.category_list.categories as Record<string, unknown>[];
+  }
 
-    const topics = (response.data.topics as DiscourseTopic[]) || [];
-    return topics.map((t) => ({
-      id: t.id,
-      title: t.title,
-      slug: t.slug,
-      posts_count: t.posts_count,
-      reply_count: t.reply_count,
-      views: t.views,
-      like_count: t.like_count,
-      has_accepted_answer: !!t.has_accepted_answer,
-      created_at: t.created_at,
-      closed: !!t.closed,
-      category_id: t.category_id,
-      tags: t.tags,
-    }));
+  async getCategoryLatest(slug: string, id: number): Promise<DevForumTopic[]> {
+    const response = await devForumClient.get(
+      `${BASE_URL}/c/${slug}/${id}/l/latest.json`,
+    );
+    return this.mapTopics(response.data.topic_list?.topics ?? []);
+  }
+
+  async getCategoryTop(
+    slug: string,
+    id: number,
+    period: "monthly" | "yearly",
+  ): Promise<DevForumTopic[]> {
+    const response = await devForumClient.get(
+      `${BASE_URL}/c/${slug}/${id}/l/top.json?period=${period}`,
+    );
+    return this.mapTopics(response.data.topic_list?.topics ?? []);
+  }
+
+  async getTopMonthly(): Promise<DevForumTopic[]> {
+    return this.fetchTop("monthly");
+  }
+
+  async getTopYearly(): Promise<DevForumTopic[]> {
+    return this.fetchTop("yearly");
+  }
+
+  async getTopAllTime(): Promise<DevForumTopic[]> {
+    return this.fetchTop("all");
   }
 
   async getTopicDetail(id: number): Promise<DevForumTopicDetail> {
-    await this.wait();
-    const url = `${BASE_URL}/t/${id}.json`;
-    const response = await axios.get(url);
+    const response = await devForumClient.get(`${BASE_URL}/t/${id}.json`);
     const t = response.data as DiscourseTopicDetail;
 
     return {
@@ -88,9 +110,9 @@ export class DevForumFetcher {
       reply_count: t.reply_count,
       views: t.views,
       like_count: t.like_count,
-      has_accepted_answer: t.has_accepted_answer,
+      has_accepted_answer: t.has_accepted_answer ?? false,
       created_at: t.created_at,
-      closed: t.closed,
+      closed: t.closed ?? false,
       category_id: t.category_id,
       tags: t.tags,
       accepted_answer_post_number: t.accepted_answer_post_number,
@@ -108,17 +130,14 @@ export class DevForumFetcher {
     };
   }
 
-  async getCategories(): Promise<Record<string, unknown>[]> {
-    const url = `${BASE_URL}/categories.json`;
-    const response = await axios.get(url);
-    return response.data.category_list.categories as Record<string, unknown>[];
+  private async fetchTop(period: TopPeriod): Promise<DevForumTopic[]> {
+    const response = await devForumClient.get(
+      `${BASE_URL}${TOP_PATHS[period]}`,
+    );
+    return this.mapTopics(response.data.topic_list?.topics ?? []);
   }
 
-  async getCategoryLatest(slug: string, id: number): Promise<DevForumTopic[]> {
-    await this.wait();
-    const url = `${BASE_URL}/c/${slug}/${id}/l/latest.json`;
-    const response = await axios.get(url);
-    const topics = (response.data.topic_list.topics as DiscourseTopic[]) || [];
+  private mapTopics(topics: DiscourseTopic[]): DevForumTopic[] {
     return topics.map((t) => ({
       id: t.id,
       title: t.title,
@@ -127,9 +146,9 @@ export class DevForumFetcher {
       reply_count: t.reply_count,
       views: t.views,
       like_count: t.like_count,
-      has_accepted_answer: !!t.has_accepted_answer,
+      has_accepted_answer: t.has_accepted_answer ?? false,
       created_at: t.created_at,
-      closed: !!t.closed,
+      closed: t.closed ?? false,
       category_id: t.category_id,
       tags: t.tags,
     }));

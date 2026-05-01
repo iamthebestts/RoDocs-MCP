@@ -19,10 +19,36 @@ const REJECTED_CATEGORIES = [
   "lounge",
 ];
 
-export function shouldRejectTopic(topic: DevForumTopic): boolean {
-  // 1. Reject closed topics without accepted answer
+export function shouldRejectTopic(topic: DevForumTopic, source?: string): boolean {
+  // 1. Reject closed topics without accepted answer (with soft exception for gold sources)
   if (topic.closed && !topic.has_accepted_answer) {
-    return true;
+    if (source?.startsWith("category-top:")) {
+      if (topic.like_count < 10) return true;
+    } else {
+      return true;
+    }
+  }
+
+  // Soft demotion for non-technical announcements
+  if (source === "category-latest:announcements") {
+    const isTechnical = [
+      "release-notes",
+      "engine",
+      "feature",
+      "studio",
+      "luau",
+      "performance",
+      "platform",
+      "engineers",
+    ].some((tag) => topic.tags?.includes(tag));
+    if (
+      !isTechnical &&
+      /what are you working on|community challenge|share your|show off|wip|introduce yourself/i.test(
+        topic.title,
+      )
+    ) {
+      return true;
+    }
   }
 
   // 2. Reject by title patterns

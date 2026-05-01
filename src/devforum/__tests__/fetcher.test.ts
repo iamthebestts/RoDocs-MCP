@@ -1,8 +1,12 @@
-import axios from "axios";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DevForumFetcher } from "../fetcher.js";
+import { devForumClient } from "../http.js";
 
-vi.mock("axios");
+vi.mock("../http.js", () => ({
+  devForumClient: {
+    get: vi.fn(),
+  },
+}));
 
 describe("DevForum Fetcher", () => {
   let fetcher: DevForumFetcher;
@@ -19,12 +23,12 @@ describe("DevForum Fetcher", () => {
         { id: 2, title: "Topic 2", slug: "topic-2", views: 200 },
       ],
     };
-    vi.mocked(axios.get).mockResolvedValue({ data: mockData });
+    vi.mocked(devForumClient.get).mockResolvedValue({ data: mockData });
 
     const topics = await fetcher.search("query");
     expect(topics).toHaveLength(2);
     expect(topics[0]?.title).toBe("Topic 1");
-    expect(axios.get).toHaveBeenCalledWith(expect.stringContaining("search.json?q=query"));
+    expect(devForumClient.get).toHaveBeenCalledWith(expect.stringContaining("search.json?q=query"));
   });
 
   it("should fetch topic detail", async () => {
@@ -44,7 +48,7 @@ describe("DevForum Fetcher", () => {
         ],
       },
     };
-    vi.mocked(axios.get).mockResolvedValue({ data: mockData });
+    vi.mocked(devForumClient.get).mockResolvedValue({ data: mockData });
 
     const detail = await fetcher.getTopicDetail(1);
     expect(detail.id).toBe(1);
@@ -57,7 +61,7 @@ describe("DevForum Fetcher", () => {
         categories: [{ id: 1, name: "Cat 1", slug: "cat-1" }],
       },
     };
-    vi.mocked(axios.get).mockResolvedValue({ data: mockData });
+    vi.mocked(devForumClient.get).mockResolvedValue({ data: mockData });
 
     const cats = await fetcher.getCategories();
     expect(cats).toHaveLength(1);
@@ -70,7 +74,7 @@ describe("DevForum Fetcher", () => {
         topics: [{ id: 1, title: "T1", slug: "t1" }],
       },
     };
-    vi.mocked(axios.get).mockResolvedValue({ data: mockData });
+    vi.mocked(devForumClient.get).mockResolvedValue({ data: mockData });
 
     const topics = await fetcher.getCategoryLatest("cat-1", 1);
     expect(topics).toHaveLength(1);

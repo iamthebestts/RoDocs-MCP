@@ -16,14 +16,14 @@ describe("DevForum Scorer", () => {
 
   it("should calculate a high score for quality topics", () => {
     const score = calculateScore(baseInput);
-    // 30 (accepted) + 15 (code) + 10 (likes) + 2 (views) + 2 (replies) = 59
-    expect(score).toBeGreaterThanOrEqual(50);
+    // 25 (accepted) + 20 (code) + 10 (likes) + 3 (views) + 2 (replies) + 5 (recent) = 65
+    expect(score).toBeGreaterThanOrEqual(60);
   });
 
   it("should boost score with staff reply", () => {
     const scoreWithout = calculateScore({ ...baseInput, hasStaffReply: false });
     const scoreWith = calculateScore({ ...baseInput, hasStaffReply: true });
-    expect(scoreWith).toBe(scoreWithout + 25);
+    expect(scoreWith).toBe(scoreWithout + 20);
   });
 
   it("should apply age penalty", () => {
