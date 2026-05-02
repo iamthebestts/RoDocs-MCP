@@ -14,6 +14,12 @@ Provides MCP-compatible AI assistants with structured access to Roblox API + Cre
 
 ## MCP Setup
 
+```bash
+npx rodocsmcp --setup claude
+```
+
+Or manually:
+
 ```json
 {
   "mcpServers": {
@@ -76,6 +82,7 @@ npx rodocsmcp --stdio
 | Command                  | Description      |
 | ------------------------ | ---------------- |
 | `<topic>`                | Show API docs    |
+| `--setup <provider>`     | Setup MCP config |
 | `--list`                 | List API names   |
 | `--find <query>`         | Resolve API name |
 | `--search-guide <query>` | Search guides    |

@@ -20,8 +20,8 @@ describe("daemon lock", () => {
   it("resolves cache and lock paths from RODOCS_CACHE_DIR", () => {
     const env = { RODOCS_CACHE_DIR: "/tmp/rodocs-cache" } as NodeJS.ProcessEnv;
 
-    expect(resolveDaemonCacheDir(env)).toBe("/tmp/rodocs-cache");
-    expect(resolveDaemonLockPath(env)).toBe("/tmp/rodocs-cache/daemon.lock");
+    expect(resolveDaemonCacheDir(env).replace(/\\/g, "/")).toBe("/tmp/rodocs-cache");
+    expect(resolveDaemonLockPath(env).replace(/\\/g, "/")).toBe("/tmp/rodocs-cache/daemon.lock");
   });
 
   it("acquires lock atomically and releases it", async () => {

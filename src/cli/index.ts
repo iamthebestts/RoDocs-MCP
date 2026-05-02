@@ -17,6 +17,7 @@ import { createServer } from "../server/index.js";
 import { createSyncStateManager, LmdbStore } from "../store/index.js";
 import { Indexer } from "../store/indexer.js";
 import { parseGithubTokenArgs } from "../utils/github-token.js";
+import { runSetup } from "./setup.js";
 
 const W = 76;
 const HR = "─".repeat(W);
@@ -488,6 +489,21 @@ async function runGuideCli(path: string, githubToken?: string): Promise<void> {
   }
 }
 
+async function runDemoCli(): Promise<void> {
+  process.stderr.write(`${dim("Running demo...")}\n`);
+  try {
+    const store = new LmdbStore();
+    await store.open();
+    process.stdout.write(`${c("green", "✔")} Store is initialized and ready.\n`);
+    await store.close();
+  } catch (err: unknown) {
+    process.stderr.write(
+      `${c("red", "✖")} Failed to access store: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+    process.exit(1);
+  }
+}
+
 // ! Entry point
 
 export async function main(
@@ -502,6 +518,24 @@ export async function main(
   }
 
   const first = args[0];
+
+  if (first === "demo") {
+    await runDemoCli();
+    return;
+  }
+
+  if (first === "--setup") {
+    const provider = args[1];
+    if (!provider) {
+      process.stderr.write(
+        `${c("red", "✖")} --setup requires a provider (claude, cursor, vscode, codex, opencode).\n`,
+      );
+      process.exit(1);
+    }
+    const daemon = args.includes("--daemon");
+    await runSetup(provider, daemon, githubToken);
+    return;
+  }
 
   if (first === "--daemon") {
     await runDaemonMode(githubToken);
