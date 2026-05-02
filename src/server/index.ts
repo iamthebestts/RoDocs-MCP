@@ -12,7 +12,12 @@ import { fetchGuide, fetchGuideIndex } from "../scraper/guides.js";
 import { scrapeIndex, scrapeMany, scrapeTopic } from "../scraper/index.js";
 import { initIndexer, search, searchGuides, warmUp } from "../search/index.js";
 import { ROBLOX_SEARCH_SOURCES, robloxSearch } from "../search/roblox-search.js";
-import { createSyncStateManager, Indexer, LmdbStore } from "../store/index.js";
+import {
+  createSyncStateManager,
+  Indexer,
+  LmdbStore,
+  type SyncStateManager,
+} from "../store/index.js";
 import { parseGithubTokenArgs, resolveGithubToken } from "../utils/github-token.js";
 
 // ! AI projection types
@@ -148,6 +153,9 @@ export interface CreateServerOptions {
   githubToken?: string;
   schedulerOptions?: { jobsOptional?: boolean };
   autoStartScheduler?: boolean;
+  store?: LmdbStore;
+  syncManager?: SyncStateManager;
+  initializeStore?: boolean;
 }
 
 export interface ServerInstance {
@@ -193,10 +201,14 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
   const githubToken = resolveServerGithubToken(options);
 
   // Initialize LMDB Store for index persistence
-  const store = new LmdbStore();
-  store.open().catch((err) => console.error(`[Server] Store open failed: ${err}`));
-  const syncManager = createSyncStateManager(store);
-  initIndexer(store, syncManager);
+  const store = options.store ?? new LmdbStore();
+  if (options.initializeStore !== false) {
+    store.open().catch((err) => console.error(`[Server] Store open failed: ${err}`));
+  }
+  const syncManager = options.syncManager ?? createSyncStateManager(store);
+  if (options.store === undefined || options.syncManager === undefined) {
+    initIndexer(store, syncManager);
+  }
   const ffSearch = new FastFlagSearch(store);
 
   const scheduler = new Scheduler(options.schedulerOptions);
@@ -281,10 +293,13 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
     },
   });
 
+  const ownsStore = options.store === undefined;
   const shutdown = () => {
     seedManager.stop();
     scheduler.stop();
-    store.close();
+    if (ownsStore) {
+      store.close();
+    }
   };
 
   server.registerTool(

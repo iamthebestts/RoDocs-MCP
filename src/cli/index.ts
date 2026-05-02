@@ -1,6 +1,7 @@
 import { resolve as resolvePath } from "node:path";
 import { pathToFileURL } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { runDaemonClient, startDaemonServer } from "../daemon/index.js";
 import { DevForumPipeline } from "../devforum/pipeline.js";
 import { FastFlagScraper } from "../fastflags/scraper.js";
 import type {
@@ -347,6 +348,8 @@ function printHelp(): void {
       bold("USAGE"),
       `  ${c("green", "rodocsmcp")}                    Start MCP server ${dim("(stdio)")}`,
       `  ${c("green", "rodocsmcp")} ${c("yellow", "--stdio")}             Start MCP server ${dim("(stdio, explicit)")}`,
+      `  ${c("green", "rodocsmcp")} ${c("yellow", "--daemon")}            Start local TCP daemon ${dim("(127.0.0.1:30030)")}`,
+      `  ${c("green", "rodocsmcp")} ${c("yellow", "--client")}            Bridge MCP stdio through local daemon`,
       `  ${c("green", "rodocsmcp")} ${c("yellow", "<TopicName>")}         Print docs for a topic`,
       `  ${c("green", "rodocsmcp")} ${c("yellow", "--list")}              List all class and enum names`,
       `  ${c("green", "rodocsmcp")} ${c("yellow", "--find <query>")}      Find closest API name`,
@@ -389,6 +392,32 @@ async function runMcpServer(githubToken?: string): Promise<void> {
   process.on("SIGTERM", () => {
     shutdown();
     process.exit(0);
+  });
+}
+
+async function runDaemonMode(githubToken?: string): Promise<void> {
+  const daemon =
+    githubToken === undefined
+      ? await startDaemonServer()
+      : await startDaemonServer({ githubToken });
+
+  const shutdown = async () => {
+    await daemon.close();
+    process.exit(0);
+  };
+
+  process.on("SIGINT", () => {
+    void shutdown();
+  });
+  process.on("SIGTERM", () => {
+    void shutdown();
+  });
+}
+
+async function runClientMode(githubToken?: string): Promise<void> {
+  await runDaemonClient({
+    fallback: () => runMcpServer(githubToken),
+    ...(githubToken === undefined ? {} : { githubToken }),
   });
 }
 
@@ -473,6 +502,16 @@ export async function main(
   }
 
   const first = args[0];
+
+  if (first === "--daemon") {
+    await runDaemonMode(githubToken);
+    return;
+  }
+
+  if (first === "--client") {
+    await runClientMode(githubToken);
+    return;
+  }
 
   if (first === "--help" || first === "-h") {
     printHelp();
