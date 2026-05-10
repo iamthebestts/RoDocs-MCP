@@ -1,3 +1,5 @@
+import { logger } from "../utils/logger.js";
+
 export interface Job {
   name: string;
   task: () => Promise<void>;
@@ -28,17 +30,17 @@ export class JobRunner {
   private async runJob(job: Job) {
     const now = new Date();
     if (job.constraints && !job.constraints(now)) {
-      console.log(`[JobRunner] skipped job ${job.name}: constraints not met`);
+      logger.debug(`[JobRunner] skipped job ${job.name}: constraints not met`);
       this.scheduleNext(job);
       return;
     }
 
     try {
-      console.log(`[JobRunner] started job ${job.name}`);
+      logger.debug(`[JobRunner] started job ${job.name}`);
       await job.task();
-      console.log(`[JobRunner] completed job ${job.name}`);
+      logger.debug(`[JobRunner] completed job ${job.name}`);
     } catch (e) {
-      console.error(
+      logger.error(
         `[JobRunner] failed job ${job.name} with reason: ${e instanceof Error ? e.message : String(e)}`,
       );
     } finally {
@@ -48,8 +50,6 @@ export class JobRunner {
 
   start() {
     this.isRunning = true;
-    // If jobs were scheduled before start(), we might need to trigger them.
-    // But usually schedule is called after start or we just let them wait.
   }
 
   stop() {

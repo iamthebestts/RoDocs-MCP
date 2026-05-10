@@ -1,4 +1,5 @@
 import * as cheerio from "cheerio";
+import { logger } from "../utils/logger.js";
 import { calculateScore } from "./scorer.js";
 import type { DevForumRecord, DevForumTopicDetail } from "./types.js";
 
@@ -110,12 +111,12 @@ function truncateWords(text: string, max: number): string {
 
 function safeAgeDays(createdAt: string | undefined, topicId: number): number {
   if (!createdAt) {
-    console.warn(`[DevForum] Missing created_at for topic ${topicId}`);
+    logger.warn(`[DevForum] Missing created_at for topic ${topicId}`);
     return 0;
   }
   const ms = Date.now() - new Date(createdAt).getTime();
   if (Number.isNaN(ms)) {
-    console.warn(`[DevForum] Invalid created_at="${createdAt}" for topic ${topicId}`);
+    logger.warn(`[DevForum] Invalid created_at="${createdAt}" for topic ${topicId}`);
     return 0;
   }
   return ms / 86_400_000;

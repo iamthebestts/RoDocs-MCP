@@ -73,7 +73,20 @@ export interface RobloxGlobal {
   deprecated: boolean;
 }
 
-export type RobloxApiEntry = RobloxClass | RobloxEnum | RobloxDatatype | RobloxGlobal;
+export interface RobloxLibrary {
+  kind: "library";
+  name: string;
+  description: string;
+  members: RobloxMember[];
+  deprecated: boolean;
+}
+
+export type RobloxApiEntry =
+  | RobloxClass
+  | RobloxEnum
+  | RobloxDatatype
+  | RobloxGlobal
+  | RobloxLibrary;
 
 export interface ScrapeResult {
   ok: true;
@@ -91,13 +104,16 @@ export type ScrapeOutcome = ScrapeResult | ScrapeError;
 
 export interface RobloxIndexEntry {
   name: string;
-  kind: "class" | "enum";
+  kind: "class" | "datatype" | "enum" | "global" | "library";
 }
 
 export interface IndexResult {
   ok: true;
   classes: string[];
+  datatypes: string[];
   enums: string[];
+  globals: string[];
+  libraries: string[];
 }
 
 // --- Search engine types ---

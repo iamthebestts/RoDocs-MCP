@@ -7,7 +7,7 @@ import { FastFlagScraper } from "../fastflags/scraper.js";
 import { FastFlagSearch } from "../fastflags/search.js";
 import { Scheduler } from "../scheduler/index.js";
 import { SeedManager, type SeedSource } from "../scheduler/seed-manager.js";
-import type { RichMember, RobloxDocEntry } from "../scraper/fetch.js";
+import type { ApiKind, CodeSample, RichMember, RobloxDocEntry } from "../scraper/fetch.js";
 import { fetchGuide, fetchGuideIndex } from "../scraper/guides.js";
 import { scrapeIndex, scrapeMany, scrapeTopic } from "../scraper/index.js";
 import { initIndexer, search, searchGuides, warmUp } from "../search/index.js";
@@ -19,10 +19,7 @@ import {
   type SyncStateManager,
 } from "../store/index.js";
 import { parseGithubTokenArgs, resolveGithubToken } from "../utils/github-token.js";
-
-// ! AI projection types
-
-// ! AI projection types
+import { logger } from "../utils/logger.js";
 
 // ! AI projection types
 
@@ -42,13 +39,13 @@ interface AIMember {
 
 interface AIEntry {
   name: string;
-  kind: "class" | "enum" | "datatype" | "global" | "library";
+  kind: ApiKind;
   summary: string;
   inherits: string[];
   deprecated: boolean;
   deprecationMessage?: string;
   members: AIMember[];
-  codeSamples: Array<{ title: string; language: string; code: string }>;
+  codeSamples: Array<{ title: string; language: string; code: string; identifier: string }>;
 }
 
 // ! Shared constants
@@ -96,6 +93,20 @@ function projectMember(
   return member;
 }
 
+function projectCodeSample(sample: CodeSample): {
+  title: string;
+  language: string;
+  code: string;
+  identifier: string;
+} {
+  return {
+    title: sample.displayName || sample.identifier,
+    language: sample.language,
+    code: sample.code,
+    identifier: sample.identifier,
+  };
+}
+
 function projectForAI(entry: RobloxDocEntry, includeInherited = false): AIEntry {
   const cl = entry.class;
 
@@ -117,16 +128,12 @@ function projectForAI(entry: RobloxDocEntry, includeInherited = false): AIEntry 
 
   const result: AIEntry = {
     name: cl.name,
-    kind: "class",
+    kind: cl.kind ?? "class",
     summary: cl.summary || cl.description,
     inherits: cl.inherits,
     deprecated: cl.deprecationMessage.length > 0 || cl.tags.includes("Deprecated"),
     members: [...ownMembers, ...inheritedMembers],
-    codeSamples: cl.codeSamples.map((s) => ({
-      title: s.displayName || s.identifier,
-      language: s.language,
-      code: s.code,
-    })),
+    codeSamples: cl.codeSamples.map(projectCodeSample),
   };
 
   if (cl.deprecationMessage) result.deprecationMessage = cl.deprecationMessage;
@@ -203,7 +210,7 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
   // Initialize LMDB Store for index persistence
   const store = options.store ?? new LmdbStore();
   if (options.initializeStore !== false) {
-    store.open().catch((err) => console.error(`[Server] Store open failed: ${err}`));
+    store.open().catch((err) => logger.error(`[Server] Store open failed: ${err}`));
   }
   const syncManager = options.syncManager ?? createSyncStateManager(store);
   if (options.store === undefined || options.syncManager === undefined) {
@@ -310,7 +317,7 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
         "Returns API documentation for a single Roblox class, enum, datatype, library or global. " +
         "Own members are always included. Inherited members are excluded by default — " +
         "set includeInherited=true only when the user explicitly asks about parent-class behavior. " +
-        "Includes parameter types, return types, security levels, thread safety and code samples.",
+        "Includes parameter types, return types, security levels, thread safety and sample metadata.",
       inputSchema: {
         topic: z
           .string()
@@ -388,7 +395,7 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
     {
       title: "List All Roblox API Names",
       description:
-        "Returns a flat list of all Roblox class names and enum names from the Creator Hub. " +
+        "Returns all Roblox API names grouped by class, datatype, enum, global, and library. " +
         "Does NOT include documentation — only names. Use this to discover available APIs, " +
         "validate topic names before calling get_api_reference, or build autocomplete lists.",
       inputSchema: {},
@@ -400,7 +407,17 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
         content: [
           {
             type: "text" as const,
-            text: JSON.stringify({ classes: result.classes, enums: result.enums }, null, 2),
+            text: JSON.stringify(
+              {
+                classes: result.classes,
+                datatypes: result.datatypes ?? [],
+                enums: result.enums,
+                globals: result.globals ?? [],
+                libraries: result.libraries ?? [],
+              },
+              null,
+              2,
+            ),
           },
         ],
       };
@@ -412,7 +429,7 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
     {
       title: "Find Closest Roblox API Name",
       description:
-        "BM25-searches all known class and enum names for the closest match to a query. " +
+        "BM25-searches known API names for the closest match to a query. " +
         "Use this when you have an approximate or misspelled name and need the exact spelling " +
         "before calling get_api_reference. Also resolves common aliases (e.g. 'datastore').",
       inputSchema: {
@@ -669,8 +686,8 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
     {
       title: "Get Roblox API Code Samples",
       description:
-        "Returns only the code samples for a Roblox API topic. " +
-        "Use when you want practical usage examples without the full API payload.",
+        "Returns code sample metadata for a Roblox API topic. " +
+        "Use when you want examples without the full API payload.",
       inputSchema: {
         topic: z
           .string()

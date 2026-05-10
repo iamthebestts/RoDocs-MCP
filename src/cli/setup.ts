@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { logger } from "../utils/logger.js";
 
 export type McpServerConfig = {
   command: string | string[];
@@ -107,33 +108,34 @@ export async function runSetup(
   // biome-ignore lint/suspicious/noExplicitAny: Required for dynamic provider access
   const provider = (PROVIDERS as any)[providerName];
   if (!provider) {
-    console.error(`Provider ${providerName} not supported.`);
+    logger.error(`Provider ${providerName} not supported.`);
     return;
   }
 
-  const p = provider.path();
-  if (!p) {
-    console.log(`Manual setup required for ${provider.name}. Schema: ...`);
+  const configPath = provider.path();
+  if (!configPath) {
+    logger.info(`Manual setup required for ${provider.name}. Schema: ...`);
     return;
   }
 
-  const backupPath = await backupFile(p);
+  const existing = await fs
+    .readFile(configPath, "utf8")
+    .catch(() => (configPath.endsWith(".toml") ? "" : "{}"));
+  const parsed = configPath.endsWith(".toml") ? existing : JSON.parse(existing);
+  const backupPath = await backupFile(configPath);
   if (backupPath) {
-    console.log(`Backup created at: ${backupPath}`);
+    logger.info(`Backup created at: ${backupPath}`);
   }
 
-  const server: McpServerConfig = {
+  const newConfig = provider.buildConfig(parsed, {
     command: "npx",
     args: ["rodocsmcp", ...(daemon ? ["--client"] : [])],
     env: githubToken ? { GITHUB_TOKEN: githubToken } : {},
-  };
+  });
 
-  if (providerName === "codex") {
-    const existing = await fs.readFile(p, "utf-8").catch(() => "");
-    await fs.writeFile(p, provider.buildConfig(existing, server));
-  } else {
-    const existing: McpConfig = JSON.parse(await fs.readFile(p, "utf-8").catch(() => "{}"));
-    await fs.writeFile(p, JSON.stringify(provider.buildConfig(existing, server), null, 2));
-  }
-  console.log(`Successfully configured ${provider.name}.`);
+  await fs.writeFile(
+    configPath,
+    configPath.endsWith(".toml") ? newConfig : JSON.stringify(newConfig, null, 2),
+  );
+  logger.info(`Successfully configured ${provider.name}.`);
 }

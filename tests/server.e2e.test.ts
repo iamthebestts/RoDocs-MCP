@@ -253,11 +253,20 @@ e2e("server e2e", () => {
     expect(result.isError).toBe(true);
   });
 
-  it("returns classes and enums arrays", async () => {
+  it("returns API name arrays grouped by category", async () => {
     const result = await callTool("list_api_names", {});
-    const payload = parseText<{ classes: string[]; enums: string[] }>(result);
+    const payload = parseText<{
+      classes: string[];
+      datatypes: string[];
+      enums: string[];
+      globals: string[];
+      libraries: string[];
+    }>(result);
     expect(Array.isArray(payload.classes)).toBe(true);
+    expect(Array.isArray(payload.datatypes)).toBe(true);
     expect(Array.isArray(payload.enums)).toBe(true);
+    expect(Array.isArray(payload.globals)).toBe(true);
+    expect(Array.isArray(payload.libraries)).toBe(true);
     expect(payload.classes.length).toBeGreaterThan(100);
     expect(payload.enums.length).toBeGreaterThan(10);
   });

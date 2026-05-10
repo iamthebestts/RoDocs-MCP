@@ -2,6 +2,7 @@ import axios from "axios";
 import type { LmdbStore, SyncStateManager } from "../store/index.js";
 import type { Indexer } from "../store/indexer.js";
 import { buildGithubHeaders } from "../utils/github-token.js";
+import { logger } from "../utils/logger.js";
 import { enrichFastFlag } from "./enricher.js";
 import { type FastFlag, normalizeFastFlag, type RawFastFlag } from "./parser.js";
 
@@ -29,7 +30,7 @@ export class FastFlagScraper {
    */
   async seed(githubToken?: string): Promise<{ added: number; updated: number }> {
     const baseUrl = "https://api.github.com/repos/MaximumADHD/Roblox-FFlag-Tracker/contents/";
-    console.log(`[FastFlagScraper] Fetching flags from ${baseUrl}...`);
+    logger.debug(`Fetching flags from ${baseUrl}...`);
 
     const headers = buildGithubHeaders({}, githubToken);
     const response = await axios.get<GitHubContentItem[]>(baseUrl, { headers });
@@ -46,11 +47,11 @@ export class FastFlagScraper {
 
       const syncState = await this.syncManager.getSourceState(`fastflags:${item.name}`);
       if (syncState?.etag === item.sha) {
-        console.log(`[FastFlagScraper] Skipping ${item.name} (no changes)`);
+        logger.debug(`Skipping ${item.name} (no changes)`);
         continue;
       }
 
-      console.log(`[FastFlagScraper] Downloading ${item.name}...`);
+      logger.debug(`Downloading ${item.name}...`);
       const fileResponse = await axios.get(item.download_url);
       const rawFlags = this.ensureArray(fileResponse.data);
 
@@ -93,7 +94,7 @@ export class FastFlagScraper {
 
     if (modified) {
       await this.indexer.clear("fastflags");
-      console.log("[FastFlagScraper] BM25 index invalidated.");
+      logger.debug("BM25 index invalidated.");
     }
 
     return { added, updated };

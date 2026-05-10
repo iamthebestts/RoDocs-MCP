@@ -14,7 +14,9 @@ const guideBM25 = new BM25();
 
 let indexer: Indexer | null = null;
 
-const apiCategories = new Map<string, "class" | "enum">();
+type ApiSearchKind = "class" | "datatype" | "enum" | "global" | "library";
+
+const apiCategories = new Map<string, ApiSearchKind>();
 const guideMetaById = new Map<string, GuideMetadata>();
 
 let apiIndexing: Promise<void> | null = null;
@@ -23,6 +25,21 @@ let guideIndexing: Promise<void> | null = null;
 const GUIDE_SCORE_THRESHOLD = 5;
 const API_SCORE_THRESHOLD = 5;
 let guideScoreThreshold = GUIDE_SCORE_THRESHOLD;
+
+function apiPathPrefix(category: ApiSearchKind): string {
+  switch (category) {
+    case "class":
+      return "classes";
+    case "datatype":
+      return "datatypes";
+    case "enum":
+      return "enums";
+    case "global":
+      return "globals";
+    case "library":
+      return "libraries";
+  }
+}
 
 /**
  * Initialize the indexer with the provided store and sync manager.
@@ -54,10 +71,11 @@ function applyQueryExpansion(
 
 function projectApiResult(name: string, score: number): SearchResult {
   const category = apiCategories.get(name);
+  const pathPrefix = category === undefined ? "classes" : apiPathPrefix(category);
   return {
     type: "api",
     name,
-    path: category === "enum" ? `enums/${name}` : `classes/${name}`,
+    path: `${pathPrefix}/${name}`,
     score,
     ...(category ? { category } : {}),
   };
@@ -84,20 +102,36 @@ function buildApiIndex(githubToken?: string): Promise<void> {
 
   apiIndexing = (async (): Promise<void> => {
     const build = async () => {
-      const { classes, enums } = await fetchIndex(githubToken);
+      const {
+        classes,
+        datatypes = [],
+        enums,
+        globals = [],
+        libraries = [],
+      } = await fetchIndex(githubToken);
       const docs: BM25Doc[] = [];
 
-      for (const name of classes) {
+      const addDocs = (names: string[], category: ApiSearchKind) => {
+        const pathPrefix = apiPathPrefix(category);
+        for (const name of names) {
+          docs.push({
+            id: name,
+            fields: { title: name, path: `${pathPrefix}/${name}` },
+          });
+          apiCategories.set(name, category);
+        }
+      };
+
+      addDocs(classes, "class");
+      addDocs(datatypes, "datatype");
+      addDocs(enums, "enum");
+      addDocs(globals, "global");
+      for (const name of libraries) {
         docs.push({
           id: name,
-          fields: { title: name, path: `classes/${name}` },
+          fields: { title: name, path: `libraries/${name}` },
         });
-        apiCategories.set(name, "class");
-      }
-
-      for (const name of enums) {
-        docs.push({ id: name, fields: { title: name, path: `enums/${name}` } });
-        apiCategories.set(name, "enum");
+        apiCategories.set(name, "library");
       }
 
       apiBM25.index(docs);

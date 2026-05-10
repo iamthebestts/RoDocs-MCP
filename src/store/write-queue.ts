@@ -1,3 +1,4 @@
+import { logger } from "../utils/logger.js";
 import type { LmdbStore } from "./lmdb-store.js";
 
 export type WriteOp = { type: "put"; key: string; value: unknown } | { type: "del"; key: string };
@@ -54,7 +55,7 @@ export class WriteQueue {
 
     if (this.queue.length >= this.batchSize) {
       this.flush().catch((err) => {
-        console.error(`[WriteQueue] Auto-flush failed: ${err}`);
+        logger.error(`[WriteQueue] Auto-flush failed: ${err}`);
       });
     } else {
       this.resetTimer();
@@ -67,7 +68,7 @@ export class WriteQueue {
     }
     this.timer = setTimeout(() => {
       this.flush().catch((err) => {
-        console.error(`[WriteQueue] Timer-flush failed: ${err}`);
+        logger.error(`[WriteQueue] Timer-flush failed: ${err}`);
       });
     }, this.flushInterval);
   }

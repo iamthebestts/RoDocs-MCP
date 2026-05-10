@@ -51,9 +51,8 @@ describe("setup", () => {
   });
 
   it("should configure VS Code", async () => {
-    const configPath = path.join(process.cwd(), ".vscode", "mcp.json");
-    // Ensure .vscode exists
-    await fs.mkdir(path.join(process.cwd(), ".vscode"), { recursive: true });
+    const configPath = path.join(tmpDir, ".vscode", "mcp.json");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
     const provider = PROVIDERS.vscode;
     if (!provider) throw new Error("Provider not found");
     vi.spyOn(provider, "path").mockReturnValue(configPath);

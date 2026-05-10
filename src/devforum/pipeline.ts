@@ -1,4 +1,5 @@
 import type { Indexer, LmdbStore, SyncStateManager } from "../store/index.js";
+import { logger } from "../utils/logger.js";
 import { Semaphore } from "../utils/semaphore.js";
 import { DevForumFetcher } from "./fetcher.js";
 import { shouldRejectTopic } from "./filters.js";
@@ -148,7 +149,7 @@ export class DevForumPipeline {
     let inFlight = 0;
     let bm25Invalidated = false;
 
-    console.log("[DevForumPipeline] Starting seed process...");
+    logger.info("[DevForumPipeline] Starting seed process...");
 
     const categories = await this.fetcher.getCategories();
     const goldCategoryMap = new Map<string, number>();
@@ -194,7 +195,7 @@ export class DevForumPipeline {
     for (const gc of GOLD_CATEGORIES) {
       const id = goldCategoryMap.get(gc.slug);
       if (!id) {
-        console.warn(`[DevForum] category-skip slug=${gc.slug}`);
+        logger.warn(`[DevForum] category-skip slug=${gc.slug}`);
         continue;
       }
       const numericWeight = CATEGORY_WEIGHT_TO_NUM[gc.weight];
@@ -286,7 +287,7 @@ export class DevForumPipeline {
       .slice(0, CONFIG.maxTopicsTotal);
 
     const goldCount = GOLD_CATEGORIES.filter((g) => goldCategoryMap.has(g.slug)).length;
-    console.log(
+    logger.info(
       `[DevForum] discovery sources=top(${topPeriods.length})+cats(${goldCount}/${GOLD_CATEGORIES.length})+queries(${EXPANDED_QUERIES.length}) unique=${candidateTopics.size} after-prefilter=${uniqueTopics.length} capped=${CONFIG.maxTopicsTotal}`,
     );
 
@@ -305,7 +306,7 @@ export class DevForumPipeline {
       const rate = done / Math.max(elapsedMs / 1000, 1);
       const remaining = uniqueTopics.length - done;
       const eta = rate > 0 ? `${Math.ceil(remaining / rate)}s` : "…";
-      console.log(
+      logger.debug(
         `[DevForum] heartbeat in-flight=${inFlight} done=${done}/${uniqueTopics.length} added=${added} lowScore=${lowScore} failed=${failed} elapsed=${Math.round(elapsedMs / 1000)}s rate=${rate.toFixed(2)} t/s eta=${eta} ${this.formatMix(sourceCounters)}`,
       );
     }, 3000);
@@ -318,7 +319,7 @@ export class DevForumPipeline {
           await this.semaphore.acquire();
           inFlight++;
           const startedAt = Date.now();
-          console.log(
+          logger.debug(
             `[DevForum] [${i + 1}/${uniqueTopics.length}] start topic=${t.id} source=${source}`,
           );
 
@@ -330,21 +331,21 @@ export class DevForumPipeline {
 
             if (record.score < CONFIG.minScore) {
               lowScore++;
-              console.log(
+              logger.debug(
                 `[DevForum] [${i + 1}/${uniqueTopics.length}] done  topic=${t.id} score=${record.score} lowScore in ${(elapsedMs / 1000).toFixed(1)}s source=${source}`,
               );
             } else {
               await this.store.put(`devforum:${record.id}`, record);
               added++;
               this.bumpCounters(sourceCounters, cand);
-              console.log(
+              logger.debug(
                 `[DevForum] [${i + 1}/${uniqueTopics.length}] done  topic=${t.id} score=${record.score} added in ${(elapsedMs / 1000).toFixed(1)}s source=${source} "${record.title}"`,
               );
             }
           } catch (e) {
             failed++;
             const reason = e instanceof Error ? e.message : String(e);
-            console.warn(
+            logger.warn(
               `[DevForum] [${i + 1}/${uniqueTopics.length}] failed topic=${t.id} reason=${reason}`,
             );
           } finally {
@@ -370,7 +371,7 @@ export class DevForumPipeline {
       metadata: { sourceMix: sourceCounters },
     });
 
-    console.log(
+    logger.info(
       `[DevForum] done in ${((Date.now() - batchStartedAt) / 1000).toFixed(1)}s. added=${added} lowScore=${lowScore} failed=${failed}. store=${added}. BM25 invalidated=${bm25Invalidated}. ${this.formatMix(sourceCounters)}`,
     );
 

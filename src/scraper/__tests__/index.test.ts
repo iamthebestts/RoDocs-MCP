@@ -95,7 +95,10 @@ describe("scraper index", () => {
 
     mockState.fetchIndex.mockResolvedValue({
       classes: ["DataStoreService"],
+      datatypes: [],
       enums: [],
+      globals: [],
+      libraries: [],
     });
     mockState.disk.get.mockResolvedValue(entry);
 
@@ -136,7 +139,10 @@ describe("scraper index", () => {
 
     mockState.fetchIndex.mockResolvedValue({
       classes: ["DataStoreService"],
+      datatypes: [],
       enums: [],
+      globals: [],
+      libraries: [],
     });
     mockState.fetchTopic.mockResolvedValue(entry);
     mockState.disk.get.mockResolvedValue(undefined);
@@ -151,7 +157,7 @@ describe("scraper index", () => {
     expect(cached.entry).toBe(entry);
     expect(mockState.fetchIndex).toHaveBeenCalledTimes(1);
     expect(mockState.fetchTopic).toHaveBeenCalledTimes(1);
-    expect(mockState.fetchTopic).toHaveBeenCalledWith("datastore");
+    expect(mockState.fetchTopic).toHaveBeenCalledWith("datastore", undefined);
     expect(mockState.disk.get).toHaveBeenCalledTimes(1);
     expect(mockState.disk.set).toHaveBeenCalledWith("datastore", entry);
     expect(mockState.disk.set).toHaveBeenCalledWith("DataStoreService", entry);
@@ -203,20 +209,27 @@ describe("scraper index", () => {
   it("finds the closest api name from a cached index", async () => {
     mockState.fetchIndex.mockResolvedValue({
       classes: ["DataStoreService", "RunService"],
+      datatypes: ["Vector3"],
       enums: ["KeyCode"],
+      globals: [],
+      libraries: [],
     });
 
     const { findClosestApiName } = await loadScraper();
 
     await expect(findClosestApiName("datastore")).resolves.toBe("DataStoreService");
     await expect(findClosestApiName("run")).resolves.toBe("RunService");
+    await expect(findClosestApiName("vector")).resolves.toBe("Vector3");
     expect(mockState.fetchIndex).toHaveBeenCalledTimes(1);
   });
 
   it("passes an explicit github token to scrapeIndex", async () => {
     mockState.fetchIndex.mockResolvedValue({
       classes: ["Actor"],
+      datatypes: [],
       enums: ["KeyCode"],
+      globals: [],
+      libraries: [],
     });
 
     const { scrapeIndex } = await loadScraper();
@@ -224,7 +237,10 @@ describe("scraper index", () => {
     await expect(scrapeIndex("pat-123")).resolves.toEqual({
       ok: true,
       classes: ["Actor"],
+      datatypes: [],
       enums: ["KeyCode"],
+      globals: [],
+      libraries: [],
     });
     expect(mockState.fetchIndex).toHaveBeenCalledWith("pat-123");
   });
@@ -254,7 +270,10 @@ describe("scraper index", () => {
 
     mockState.fetchIndex.mockResolvedValue({
       classes: ["Actor"],
+      datatypes: [],
       enums: [],
+      globals: [],
+      libraries: [],
     });
     mockState.fetchTopic.mockResolvedValue(entry);
     mockState.disk.get.mockResolvedValue(undefined);

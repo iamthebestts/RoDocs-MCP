@@ -1,6 +1,7 @@
 import axios from "axios";
 import { resolveLuauSynonyms } from "../search/aliases.js";
 import { buildGithubHeaders } from "../utils/github-token.js";
+import { logger } from "../utils/logger.js";
 import { MemoryCache } from "./cache.js";
 
 export interface GuideMetadata {
@@ -91,7 +92,8 @@ export async function fetchGuideIndex(githubToken?: string): Promise<GuideMetada
         typeof item.path === "string" &&
         item.path.startsWith(CONTENT_PREFIX) &&
         item.path.endsWith(".md") &&
-        !item.path.startsWith(REFERENCE_PREFIX)
+        !item.path.startsWith(REFERENCE_PREFIX) &&
+        !item.path.toLowerCase().endsWith("/readme.md")
       );
     })
     .map((item) => {
@@ -149,7 +151,7 @@ export async function fetchGuide(path: string, githubToken?: string): Promise<Gu
     return result;
   } catch (err) {
     if (axios.isAxiosError(err) && err.response?.status === 404) {
-      console.error(`[fetchGuide] 404 for path: ${path} at URL: ${url}`);
+      logger.error(`[fetchGuide] 404 for path: ${path} at URL: ${url}`);
       return null;
     }
     throw err;
