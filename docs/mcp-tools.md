@@ -52,13 +52,13 @@ Fetches API references for up to 20 Roblox topics in one call.
   {
     "ok": false,
     "topic": "InvalidName",
-    "error": "Topic \"InvalidName\" not found on Creator Hub."
+    "error": "Topic \"InvalidName\" not found in creator-docs reference."
   }
 ]
 ```
 
 ## `list_api_names`
-Returns a flat list of all Roblox class names and enum names.
+Returns Roblox API names grouped by class, datatype, enum, global, and library.
 
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
@@ -68,12 +68,15 @@ Returns a flat list of all Roblox class names and enum names.
 ```json
 {
   "classes": ["Actor", "BasePart", "Instance", "..."],
-  "enums": ["Enum.Material", "Enum.KeyCode", "..."]
+  "datatypes": ["Vector3", "CFrame", "..."],
+  "enums": ["Material", "KeyCode", "..."],
+  "globals": ["task", "..."],
+  "libraries": ["buffer", "..."]
 }
 ```
 
 ## `find_api_name`
-BM25-searches all known class and enum names for the closest match to a query. Resolves common aliases (e.g., 'datastore').
+BM25-searches known API names for the closest match to a query. Resolves common aliases (e.g., 'datastore').
 
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
@@ -138,7 +141,7 @@ Returns the full index of all Roblox creator guide paths and their categories.
 ```
 
 ## `get_code_samples`
-Returns only the code samples for a Roblox API topic.
+Returns code sample metadata for a Roblox API topic.
 
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
@@ -152,7 +155,7 @@ Returns only the code samples for a Roblox API topic.
     "displayName": "Create Tween",
     "description": "Basic TweenService example",
     "language": "luau",
-    "code": "local TweenService = game:GetService(\"TweenService\")"
+    "code": ""
   }
 ]
 ```

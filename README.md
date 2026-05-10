@@ -52,12 +52,12 @@ If you need higher GitHub API limits or access to authenticated raw/content fetc
 | ------------------------- | ------------------------ |
 | `get_api_reference`       | Fetch API entry          |
 | `get_many_api_references` | Batch fetch (max 20)     |
-| `list_api_names`          | List classes/enums       |
+| `list_api_names`          | List API names by category |
 | `find_api_name`           | Resolve closest API name |
 | `search_guides`           | Search Creator Guides    |
 | `get_guide`               | Fetch guide content      |
 | `list_guides`             | List available guides    |
-| `get_code_samples`        | Fetch code samples only  |
+| `get_code_samples`        | Fetch code sample metadata |
 | `compare_api_members`     | Compare topic members    |
 | `get_api_changelog`       | Inspect deprecations     |
 
@@ -160,8 +160,8 @@ pnpm test
 
 ## How it works
 
-- **API Reference**: Extracted from `__NEXT_DATA__` on Creator Hub (no DOM scraping)
-- **Guides**: Fetched and indexed from Creator Hub docs
+- **API Reference**: Fetched from `Roblox/creator-docs` YAML files for classes, datatypes, enums, globals, and libraries
+- **Guides**: Fetched and indexed from `Roblox/creator-docs` Markdown files
 - **Search**: BM25 ranking with alias normalization and Luau synonym resolution
 - **Cache**: In-memory TTL (10 min)
 
