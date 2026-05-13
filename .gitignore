@@ -10,3 +10,5 @@ node_modules/
 coverage
 .zed
 .codex
+graphify-out/manifest.json
+graphify-out/cache/
