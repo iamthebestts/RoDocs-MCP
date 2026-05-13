@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DevForumRecord } from "../../devforum/types.js";
 import type { FastFlag } from "../../fastflags/parser.js";
+import { _resetFastFlagsIndexForTesting } from "../../fastflags/search.js";
 import type { LmdbStore } from "../../store/index.js";
 import { robloxSearch } from "../roblox-search.js";
 
@@ -68,6 +69,7 @@ function devForumRecord(
 describe("robloxSearch", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    _resetFastFlagsIndexForTesting();
     searchState.searchApisLocal.mockResolvedValue([
       {
         type: "api",

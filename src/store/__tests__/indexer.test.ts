@@ -58,4 +58,26 @@ describe("Indexer", () => {
     const loaded = await indexer.load(newBm25, "test");
     expect(loaded).toBe(false);
   });
+
+  it("calls the registered onClear callback when clear() is invoked", async () => {
+    let called = false;
+    indexer.onClear("mySource", () => {
+      called = true;
+    });
+
+    await indexer.clear("mySource");
+
+    expect(called).toBe(true);
+  });
+
+  it("does not call callback for unrelated sources", async () => {
+    let called = false;
+    indexer.onClear("sourceA", () => {
+      called = true;
+    });
+
+    await indexer.clear("sourceB");
+
+    expect(called).toBe(false);
+  });
 });

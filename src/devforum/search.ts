@@ -1,5 +1,34 @@
+import type { BM25Doc } from "../search/bm25.js";
+import { BM25 } from "../search/bm25.js";
 import type { LmdbStore } from "../store/index.js";
+import type { Indexer } from "../store/indexer.js";
 import type { DevForumRecord } from "./types.js";
+
+// Module-level singleton: built once per session, invalidated on write.
+const _bm25 = new BM25();
+let _buildPromise: Promise<void> | null = null;
+let _cachedRecords: readonly DevForumRecord[] = [];
+let _indexer: Indexer | null = null;
+
+function _invalidate(): void {
+  _buildPromise = null;
+  _bm25.reset();
+  _cachedRecords = [];
+}
+
+/**
+ * Wires the devforum search singleton to the shared Indexer so that writes
+ * from DevForumPipeline propagate as in-memory cache invalidation.
+ */
+export function initDevForumSearch(indexer: Indexer): void {
+  _indexer = indexer;
+  indexer.onClear("devforum", _invalidate);
+}
+
+export function _resetDevForumIndexForTesting(): void {
+  _invalidate();
+  _indexer = null;
+}
 
 export interface DevForumSearchOptions {
   query: string;
@@ -114,10 +143,95 @@ function project(record: DevForumRecord): DevForumSearchResult {
   };
 }
 
+async function buildDevForumIndex(store: LmdbStore): Promise<void> {
+  const keys = (await store.keys()).filter((key) => key.startsWith("devforum:"));
+  const records = (await Promise.all(keys.map((key) => store.get<DevForumRecord>(key)))).filter(
+    (record): record is DevForumRecord => record !== null,
+  );
+
+  const docs: BM25Doc[] = records.map((record) => ({
+    id: String(record.id),
+    fields: {
+      title: record.title,
+      content: [record.acceptedAnswer ?? "", ...record.staffReplies, ...record.codeSnippets].join(
+        " ",
+      ),
+      description: record.tags.join(" "),
+      path: record.url,
+    },
+  }));
+
+  _cachedRecords = records;
+  _bm25.index(docs);
+}
+
+async function ensureDevForumIndex(store: LmdbStore): Promise<boolean> {
+  if (_indexer === null) return false;
+  if (_buildPromise !== null) {
+    await _buildPromise;
+    return true;
+  }
+  _buildPromise = buildDevForumIndex(store).catch((err: unknown) => {
+    _buildPromise = null;
+    throw err;
+  });
+  await _buildPromise;
+  return true;
+}
+
+function applyFilters(
+  records: readonly DevForumRecord[],
+  options: DevForumSearchOptions,
+): DevForumRecord[] {
+  const minScore = options.minScore ?? DEFAULT_MIN_SCORE;
+  return records
+    .filter((record) => record.score >= minScore)
+    .filter((record) => hasAllTags(record, options.tags))
+    .filter((record) => !options.requireAcceptedAnswer || record.acceptedAnswer !== undefined)
+    .filter((record) => !options.requireStaffReply || record.staffReplies.length > 0);
+}
+
 export async function searchDevForumStore(
   store: LmdbStore,
   options: DevForumSearchOptions,
 ): Promise<DevForumSearchResponse> {
+  const useCache = await ensureDevForumIndex(store);
+
+  if (useCache) {
+    if (_cachedRecords.length === 0) {
+      return {
+        query: options.query,
+        results: [],
+        message:
+          "No local DevForum records found. Run `npx rodocsmcp --seed-devforum` to seed curated DevForum content.",
+      };
+    }
+
+    const terms = queryTerms(options.query);
+    const limit = clampLimit(options.limit);
+
+    // Use BM25 for candidate selection; keep existing term-count relevance for ranking.
+    let candidates: readonly DevForumRecord[];
+    if (terms.length > 0) {
+      const bm25Results = _bm25.search(options.query, _cachedRecords.length);
+      if (bm25Results.length === 0) return { query: options.query, results: [] };
+      const candidateIds = new Set(bm25Results.map((r) => r.id));
+      candidates = _cachedRecords.filter((r) => candidateIds.has(String(r.id)));
+    } else {
+      candidates = _cachedRecords;
+    }
+
+    const results = applyFilters(candidates, options)
+      .map((record) => ({ record, relevance: relevance(record, terms) }))
+      .filter((entry) => entry.relevance > 0)
+      .sort((a, b) => b.relevance - a.relevance || b.record.score - a.record.score)
+      .slice(0, limit)
+      .map((entry) => project(entry.record));
+
+    return { query: options.query, results };
+  }
+
+  // Fallback: per-call LMDB scan (used when no Indexer is registered, e.g. in unit tests).
   const keys = (await store.keys()).filter((key) => key.startsWith("devforum:"));
   if (keys.length === 0) {
     return {

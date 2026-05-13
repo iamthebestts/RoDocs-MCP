@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LmdbStore } from "../../store/index.js";
-import { searchDevForumStore } from "../search.js";
+import type { Indexer } from "../../store/indexer.js";
+import {
+  _resetDevForumIndexForTesting,
+  initDevForumSearch,
+  searchDevForumStore,
+} from "../search.js";
 import type { DevForumRecord } from "../types.js";
 
 class MemoryStore {
@@ -36,7 +41,16 @@ function record(overrides: Partial<DevForumRecord>): DevForumRecord {
   };
 }
 
-describe("searchDevForumStore", () => {
+describe("searchDevForumStore (fallback path — no Indexer)", () => {
+  // These tests exercise the existing per-call LMDB path (no initDevForumSearch called).
+  beforeEach(() => {
+    _resetDevForumIndexForTesting();
+  });
+
+  afterEach(() => {
+    _resetDevForumIndexForTesting();
+  });
+
   it("returns a setup message when the local store is empty", async () => {
     const result = await searchDevForumStore(asStore(new MemoryStore()), { query: "datastore" });
 
@@ -215,5 +229,107 @@ describe("searchDevForumStore", () => {
 
     expect(result.results).toHaveLength(25);
     expect(result.results[0]?.title).toBe("DataStore topic 5");
+  });
+});
+
+describe("searchDevForumStore (cached path — with Indexer)", () => {
+  let clearCallback: (() => void) | undefined;
+  let fakeIndexer: Indexer;
+
+  beforeEach(() => {
+    _resetDevForumIndexForTesting();
+    clearCallback = undefined;
+    fakeIndexer = {
+      onClear: (_source: string, cb: () => void) => {
+        clearCallback = cb;
+      },
+    } as unknown as Indexer;
+    initDevForumSearch(fakeIndexer);
+  });
+
+  afterEach(() => {
+    _resetDevForumIndexForTesting();
+  });
+
+  it("returns results via cache after index is built", async () => {
+    const store = asStore(
+      new MemoryStore(
+        new Map<string, unknown>([
+          ["devforum:1", record({ id: 1, title: "DataStore saving fails" })],
+        ]),
+      ),
+    );
+
+    const result = await searchDevForumStore(store, { query: "DataStore", minScore: 0 });
+
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0]?.title).toBe("DataStore saving fails");
+  });
+
+  it("cache hit: does not reload records from store on second call", async () => {
+    const memStore = new MemoryStore(new Map<string, unknown>([["devforum:1", record({ id: 1 })]]));
+    const keysSpy = vi.spyOn(memStore, "keys");
+    const store = asStore(memStore);
+
+    await searchDevForumStore(store, { query: "DataStore", minScore: 0 });
+    await searchDevForumStore(store, { query: "DataStore", minScore: 0 });
+
+    expect(keysSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns empty message when cache is empty (no records in store)", async () => {
+    const store = asStore(new MemoryStore(new Map()));
+
+    const result = await searchDevForumStore(store, { query: "DataStore" });
+
+    expect(result.results).toEqual([]);
+    expect(result.message).toContain("npx rodocsmcp --seed-devforum");
+  });
+
+  it("returns empty array after BM25 pre-filter finds no candidates", async () => {
+    const store = asStore(
+      new MemoryStore(
+        new Map<string, unknown>([["devforum:1", record({ id: 1, title: "Physics joints" })]]),
+      ),
+    );
+
+    const result = await searchDevForumStore(store, { query: "QuantumEntanglement", minScore: 0 });
+
+    expect(result.results).toEqual([]);
+  });
+
+  it("invalidation: rebuilds index after onClear fires", async () => {
+    const memStore = new MemoryStore(new Map<string, unknown>([["devforum:1", record({ id: 1 })]]));
+    const keysSpy = vi.spyOn(memStore, "keys");
+    const store = asStore(memStore);
+
+    await searchDevForumStore(store, { query: "DataStore", minScore: 0 });
+    expect(keysSpy).toHaveBeenCalledTimes(1);
+
+    // Simulate DevForumPipeline calling indexer.clear("devforum")
+    clearCallback?.();
+
+    await searchDevForumStore(store, { query: "DataStore", minScore: 0 });
+    expect(keysSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("applies minScore, tags, acceptedAnswer, staffReply filters from cache", async () => {
+    const store = asStore(
+      new MemoryStore(
+        new Map<string, unknown>([
+          ["devforum:1", record({ id: 1, score: 85, tags: ["scripting", "data-store"] })],
+          ["devforum:2", record({ id: 2, score: 30, tags: ["scripting"] })],
+        ]),
+      ),
+    );
+
+    const result = await searchDevForumStore(store, {
+      query: "DataStore",
+      minScore: 80,
+      tags: ["data-store"],
+    });
+
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0]?.tags).toContain("data-store");
   });
 });

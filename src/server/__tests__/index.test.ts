@@ -124,6 +124,7 @@ vi.mock("../../search/roblox-search.js", () => ({
 
 vi.mock("../../devforum/search.js", () => ({
   searchDevForumStore: serverState.searchDevForumStore,
+  initDevForumSearch: vi.fn(),
 }));
 
 vi.mock("../../store/index.js", () => {

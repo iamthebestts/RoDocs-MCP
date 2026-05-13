@@ -77,6 +77,7 @@ vi.mock("../../scraper/guides.js", () => ({
   searchGuides: vi.fn(),
 }));
 
+import type { Indexer } from "../../store/indexer.js";
 import {
   _resetIndexesForTesting,
   initIndexer,
@@ -266,6 +267,73 @@ describe("search", () => {
     it("executes without throwing", () => {
       expect(() => warmUp()).not.toThrow();
     });
+  });
+});
+
+describe("initIndexer invalidation via onClear", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetIndexesForTesting();
+  });
+
+  it("rebuilds the API index after the shared indexer fires clear('api')", async () => {
+    const fakeIndexer = {
+      _store: {},
+      _syncManager: {},
+      onClear: vi.fn(),
+      load: vi.fn().mockResolvedValue(false),
+      save: vi.fn().mockResolvedValue(undefined),
+      loadOrBuildIndex: vi.fn().mockImplementation(async (_s, _b, builder) => {
+        await builder();
+      }),
+    } as unknown as Indexer;
+
+    // Capture the "api" callback registered by initIndexer
+    let apiClearCallback: (() => void) | undefined;
+    vi.mocked(fakeIndexer.onClear).mockImplementation((source, cb) => {
+      if (source === "api") apiClearCallback = cb;
+    });
+
+    initIndexer({} as never, {} as never, fakeIndexer);
+
+    // First search builds the index
+    await searchApis("TweenService", 3);
+    expect(mockFetchIndex).toHaveBeenCalledTimes(1);
+
+    // Simulated write: pipeline calls indexer.clear("api") which fires the callback
+    apiClearCallback?.();
+
+    // Next search must rebuild (fetch called again)
+    await searchApis("RunService", 3);
+    expect(mockFetchIndex).toHaveBeenCalledTimes(2);
+  });
+
+  it("rebuilds the guide index after the shared indexer fires clear('guides')", async () => {
+    const fakeIndexer = {
+      _store: {},
+      _syncManager: {},
+      onClear: vi.fn(),
+      load: vi.fn().mockResolvedValue(false),
+      save: vi.fn().mockResolvedValue(undefined),
+      loadOrBuildIndex: vi.fn().mockImplementation(async (_s, _b, builder) => {
+        await builder();
+      }),
+    } as unknown as Indexer;
+
+    let guidesClearCallback: (() => void) | undefined;
+    vi.mocked(fakeIndexer.onClear).mockImplementation((source, cb) => {
+      if (source === "guides") guidesClearCallback = cb;
+    });
+
+    initIndexer({} as never, {} as never, fakeIndexer);
+
+    await searchGuides("save player data", 3);
+    expect(mockFetchGuideIndex).toHaveBeenCalledTimes(1);
+
+    guidesClearCallback?.();
+
+    await searchGuides("remote events", 3);
+    expect(mockFetchGuideIndex).toHaveBeenCalledTimes(2);
   });
 });
 

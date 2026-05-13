@@ -17,12 +17,21 @@ interface SerializedIndex {
  */
 export class Indexer {
   private readonly basePath: string;
+  private readonly clearCallbacks = new Map<string, () => void>();
 
   constructor(
     readonly _store: LmdbStore,
     readonly _syncManager: SyncStateManager,
   ) {
     this.basePath = join(_store.getPath().replace(/store\.lmdb$/, ""), "");
+  }
+
+  /**
+   * Registers a callback to be invoked when clear() is called for the given source.
+   * Allows in-memory caches to be invalidated alongside the on-disk index.
+   */
+  onClear(source: string, callback: () => void): void {
+    this.clearCallbacks.set(source, callback);
   }
 
   private getIndexPath(source: string): string {
@@ -63,7 +72,7 @@ export class Indexer {
   }
 
   /**
-   * Deletes the persisted index.
+   * Deletes the persisted index and notifies any registered in-memory invalidation callbacks.
    */
   async clear(source: string): Promise<void> {
     try {
@@ -71,6 +80,7 @@ export class Indexer {
     } catch (_error) {
       // Ignore
     }
+    this.clearCallbacks.get(source)?.();
   }
 
   /**

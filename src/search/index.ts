@@ -43,9 +43,24 @@ function apiPathPrefix(category: ApiSearchKind): string {
 
 /**
  * Initialize the indexer with the provided store and sync manager.
+ * Accepts an existing Indexer instance so the server can share one across all components.
  */
-export function initIndexer(store: LmdbStore, syncManager: SyncStateManager): void {
-  indexer = new Indexer(store, syncManager);
+export function initIndexer(
+  store: LmdbStore,
+  syncManager: SyncStateManager,
+  existingIndexer?: Indexer,
+): void {
+  indexer = existingIndexer ?? new Indexer(store, syncManager);
+  indexer.onClear("api", () => {
+    apiIndexing = null;
+    apiBM25.reset();
+    apiCategories.clear();
+  });
+  indexer.onClear("guides", () => {
+    guideIndexing = null;
+    guideBM25.reset();
+    guideMetaById.clear();
+  });
 }
 
 function uniqueByName(results: readonly SearchResult[]): readonly SearchResult[] {

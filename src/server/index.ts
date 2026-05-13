@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { setupRateLimiter } from "../devforum/http.js";
 import { DevForumPipeline } from "../devforum/pipeline.js";
-import { searchDevForumStore } from "../devforum/search.js";
+import { initDevForumSearch, searchDevForumStore } from "../devforum/search.js";
 import { FastFlagScraper } from "../fastflags/scraper.js";
 import { FastFlagSearch } from "../fastflags/search.js";
 import { Scheduler } from "../scheduler/index.js";
@@ -213,10 +213,15 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
     store.open().catch((err) => logger.error(`[Server] Store open failed: ${err}`));
   }
   const syncManager = options.syncManager ?? createSyncStateManager(store);
+
+  // Single shared Indexer so that write-side invalidation (scraper/pipeline) reaches
+  // the in-memory caches registered via onClear() in the search modules.
+  const sharedIndexer = new Indexer(store, syncManager);
   if (options.store === undefined || options.syncManager === undefined) {
-    initIndexer(store, syncManager);
+    initIndexer(store, syncManager, sharedIndexer);
+    initDevForumSearch(sharedIndexer);
   }
-  const ffSearch = new FastFlagSearch(store);
+  const ffSearch = new FastFlagSearch(store, sharedIndexer);
 
   const scheduler = new Scheduler(options.schedulerOptions);
   setupRateLimiter(scheduler.devForumRateLimiter);
@@ -226,12 +231,8 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
     version: "1.0.0",
   });
 
-  const fastFlagScraper = new FastFlagScraper(store, syncManager, new Indexer(store, syncManager));
-  const devForumPipeline = new DevForumPipeline(
-    store,
-    syncManager,
-    new Indexer(store, syncManager),
-  );
+  const fastFlagScraper = new FastFlagScraper(store, syncManager, sharedIndexer);
+  const devForumPipeline = new DevForumPipeline(store, syncManager, sharedIndexer);
   const seedManager = new SeedManager({
     syncManager,
     idleDetector: scheduler.idleDetector,
