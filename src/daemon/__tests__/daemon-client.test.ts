@@ -1,10 +1,9 @@
-import type net from "node:net";
-import { createServer } from "node:net";
+import net, { createServer } from "node:net";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { pollForReadySocket, runDaemonClient } from "../daemon-client.js";
 import type { DaemonLock } from "../daemon-lock.js";
-import { DAEMON_PORT, encodeFrame, FrameDecoder, isPing } from "../daemon-protocol.js";
+import { encodeFrame, FrameDecoder, isPing, isPong } from "../daemon-protocol.js";
 
 function createLock(): DaemonLock {
   return {
@@ -16,7 +15,13 @@ function createLock(): DaemonLock {
 
 describe("daemon client", () => {
   it("handshakes with the daemon and bridges MCP after pong", async () => {
+    // Track active server-side sockets for deterministic teardown
+    const activeSockets = new Set<net.Socket>();
+
     const tcpServer = createServer((socket) => {
+      activeSockets.add(socket);
+      socket.once("close", () => activeSockets.delete(socket));
+
       const decoder = new FrameDecoder();
       socket.on("data", (chunk) => {
         const buffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
@@ -29,13 +34,47 @@ describe("daemon client", () => {
         }
       });
     });
-    await new Promise<void>((resolve) => tcpServer.listen(DAEMON_PORT, "127.0.0.1", resolve));
+
+    // port 0 → OS assigns a free port; eliminates hardcoded-port conflicts
+    await new Promise<void>((resolve, reject) => {
+      tcpServer.once("error", reject);
+      tcpServer.listen(0, "127.0.0.1", () => {
+        tcpServer.off("error", reject);
+        resolve();
+      });
+    });
+    const { port } = tcpServer.address() as net.AddressInfo;
+
+    // Custom connect that targets the dynamic port and performs the ping/pong handshake,
+    // mirroring what connectToDaemon() does in production.
+    const connect = async (): Promise<net.Socket> => {
+      const socket = net.createConnection({ host: "127.0.0.1", port });
+      await new Promise<void>((resolve, reject) => {
+        socket.once("connect", resolve);
+        socket.once("error", reject);
+      });
+      await new Promise<void>((resolve, reject) => {
+        const decoder = new FrameDecoder();
+        const onData = (chunk: Buffer): void => {
+          for (const frame of decoder.push(chunk)) {
+            socket.off("data", onData);
+            if (isPong(frame)) resolve();
+            else reject(new Error("Expected pong from server"));
+            return;
+          }
+        };
+        socket.on("data", onData);
+        socket.once("error", reject);
+        socket.write(encodeFrame({ type: "ping" }));
+      });
+      return socket;
+    };
 
     const stdin = new PassThrough();
     const stdout = new PassThrough();
     const stderr = new PassThrough();
     const fallback = vi.fn(async () => {});
-    await runDaemonClient({ fallback, stdin, stdout, stderr, retryMs: 100 });
+    await runDaemonClient({ fallback, stdin, stdout, stderr, retryMs: 100, connect });
 
     const output = new Promise<string>((resolve) => {
       stdout.once("data", (chunk: Buffer) => resolve(chunk.toString("utf8")));
@@ -46,6 +85,8 @@ describe("daemon client", () => {
     expect(fallback).not.toHaveBeenCalled();
 
     stdin.end();
+    // Destroy active server-side sockets so tcpServer.close() resolves immediately
+    for (const s of activeSockets) s.destroy();
     await new Promise<void>((resolve, reject) => {
       tcpServer.close((error) => (error ? reject(error) : resolve()));
     });
