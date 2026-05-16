@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { _setLogEventSinkForTesting, type LogEvent } from "../../utils/logger.js";
 
 const mockFetchIndex = vi.hoisted(() =>
   vi.fn().mockResolvedValue({
@@ -375,6 +376,52 @@ describe("searchApis (direct)", () => {
     expect(results.some((r) => r.name === "RunService")).toBe(true);
     expect(mockFetchIndex).not.toHaveBeenCalled();
   });
+
+  describe("API search observability", () => {
+    const events: LogEvent[] = [];
+
+    beforeEach(() => {
+      events.length = 0;
+      _setLogEventSinkForTesting((e) => events.push(e));
+    });
+
+    afterEach(() => {
+      _setLogEventSinkForTesting(null);
+    });
+
+    it("emits search.query with source=api from searchApis()", async () => {
+      await searchApis("DataStore", 5);
+
+      const event = events.find((e) => e.event === "search.query" && e.source === "api");
+      expect(event).toMatchObject({ event: "search.query", source: "api" });
+      expect(typeof event?.durationMs).toBe("number");
+    });
+
+    it("emits exactly one search.query per searchApis() call", async () => {
+      await searchApis("DataStore", 5);
+
+      expect(events.filter((e) => e.event === "search.query" && e.source === "api")).toHaveLength(
+        1,
+      );
+    });
+
+    it("emits search.rebuild with source=api when building the API index for the first time", async () => {
+      await searchApis("DataStore", 5);
+
+      const event = events.find((e) => e.event === "search.rebuild" && e.source === "api");
+      expect(event).toMatchObject({ event: "search.rebuild", source: "api" });
+      expect(typeof event?.durationMs).toBe("number");
+    });
+
+    it("does not emit search.rebuild on second call (index cached)", async () => {
+      await searchApis("DataStore", 5);
+      events.length = 0;
+
+      await searchApis("RunService", 5);
+
+      expect(events.some((e) => e.event === "search.rebuild" && e.source === "api")).toBe(false);
+    });
+  });
 });
 
 describe("searchGuides (direct)", () => {
@@ -423,6 +470,52 @@ describe("searchGuides (direct)", () => {
       for (const r of results) {
         expect(r.score).toBeGreaterThanOrEqual(5);
       }
+    });
+  });
+
+  describe("guides search observability", () => {
+    const events: LogEvent[] = [];
+
+    beforeEach(() => {
+      events.length = 0;
+      _setLogEventSinkForTesting((e) => events.push(e));
+    });
+
+    afterEach(() => {
+      _setLogEventSinkForTesting(null);
+    });
+
+    it("emits search.query with source=guides from searchGuides()", async () => {
+      await searchGuides("data store", 5);
+
+      const event = events.find((e) => e.event === "search.query" && e.source === "guides");
+      expect(event).toMatchObject({ event: "search.query", source: "guides" });
+      expect(typeof event?.durationMs).toBe("number");
+    });
+
+    it("emits exactly one search.query per searchGuides() call", async () => {
+      await searchGuides("data store", 5);
+
+      expect(
+        events.filter((e) => e.event === "search.query" && e.source === "guides"),
+      ).toHaveLength(1);
+    });
+
+    it("emits search.rebuild with source=guides when building guide index for the first time", async () => {
+      await searchGuides("data store", 5);
+
+      const event = events.find((e) => e.event === "search.rebuild" && e.source === "guides");
+      expect(event).toMatchObject({ event: "search.rebuild", source: "guides" });
+      expect(typeof event?.durationMs).toBe("number");
+    });
+
+    it("does not emit search.rebuild on second call (guide index cached)", async () => {
+      await searchGuides("data store", 5);
+      events.length = 0;
+
+      await searchGuides("remote events", 5);
+
+      expect(events.some((e) => e.event === "search.rebuild" && e.source === "guides")).toBe(false);
     });
   });
 });

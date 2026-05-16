@@ -2,6 +2,7 @@ import type { BM25Doc } from "../search/bm25.js";
 import { BM25 } from "../search/bm25.js";
 import type { LmdbStore } from "../store/index.js";
 import type { Indexer } from "../store/indexer.js";
+import { observe, startTimer } from "../utils/logger.js";
 import type { DevForumRecord } from "./types.js";
 
 // Module-level singleton: built once per session, invalidated on write.
@@ -144,6 +145,7 @@ function project(record: DevForumRecord): DevForumSearchResult {
 }
 
 async function buildDevForumIndex(store: LmdbStore): Promise<void> {
+  const elapsed = startTimer();
   const keys = (await store.keys()).filter((key) => key.startsWith("devforum:"));
   const records = (await Promise.all(keys.map((key) => store.get<DevForumRecord>(key)))).filter(
     (record): record is DevForumRecord => record !== null,
@@ -163,6 +165,7 @@ async function buildDevForumIndex(store: LmdbStore): Promise<void> {
 
   _cachedRecords = records;
   _bm25.index(docs);
+  observe({ event: "search.rebuild", source: "devforum", durationMs: elapsed() });
 }
 
 async function ensureDevForumIndex(store: LmdbStore): Promise<boolean> {
@@ -195,10 +198,47 @@ export async function searchDevForumStore(
   store: LmdbStore,
   options: DevForumSearchOptions,
 ): Promise<DevForumSearchResponse> {
-  const useCache = await ensureDevForumIndex(store);
+  const elapsed = startTimer();
+  try {
+    const useCache = await ensureDevForumIndex(store);
 
-  if (useCache) {
-    if (_cachedRecords.length === 0) {
+    if (useCache) {
+      if (_cachedRecords.length === 0) {
+        return {
+          query: options.query,
+          results: [],
+          message:
+            "No local DevForum records found. Run `npx rodocsmcp --seed-devforum` to seed curated DevForum content.",
+        };
+      }
+
+      const terms = queryTerms(options.query);
+      const limit = clampLimit(options.limit);
+
+      // Use BM25 for candidate selection; keep existing term-count relevance for ranking.
+      let candidates: readonly DevForumRecord[];
+      if (terms.length > 0) {
+        const bm25Results = _bm25.search(options.query, _cachedRecords.length);
+        if (bm25Results.length === 0) return { query: options.query, results: [] };
+        const candidateIds = new Set(bm25Results.map((r) => r.id));
+        candidates = _cachedRecords.filter((r) => candidateIds.has(String(r.id)));
+      } else {
+        candidates = _cachedRecords;
+      }
+
+      const results = applyFilters(candidates, options)
+        .map((record) => ({ record, relevance: relevance(record, terms) }))
+        .filter((entry) => entry.relevance > 0)
+        .sort((a, b) => b.relevance - a.relevance || b.record.score - a.record.score)
+        .slice(0, limit)
+        .map((entry) => project(entry.record));
+
+      return { query: options.query, results };
+    }
+
+    // Fallback: per-call LMDB scan (used when no Indexer is registered, e.g. in unit tests).
+    const keys = (await store.keys()).filter((key) => key.startsWith("devforum:"));
+    if (keys.length === 0) {
       return {
         query: options.query,
         results: [],
@@ -207,62 +247,30 @@ export async function searchDevForumStore(
       };
     }
 
-    const terms = queryTerms(options.query);
+    const records = (await Promise.all(keys.map((key) => store.get<DevForumRecord>(key)))).filter(
+      (record): record is DevForumRecord => record !== null,
+    );
+
+    const minScore = options.minScore ?? DEFAULT_MIN_SCORE;
     const limit = clampLimit(options.limit);
+    const terms = queryTerms(options.query);
 
-    // Use BM25 for candidate selection; keep existing term-count relevance for ranking.
-    let candidates: readonly DevForumRecord[];
-    if (terms.length > 0) {
-      const bm25Results = _bm25.search(options.query, _cachedRecords.length);
-      if (bm25Results.length === 0) return { query: options.query, results: [] };
-      const candidateIds = new Set(bm25Results.map((r) => r.id));
-      candidates = _cachedRecords.filter((r) => candidateIds.has(String(r.id)));
-    } else {
-      candidates = _cachedRecords;
-    }
-
-    const results = applyFilters(candidates, options)
+    const results = records
+      .filter((record) => record.score >= minScore)
+      .filter((record) => hasAllTags(record, options.tags))
+      .filter((record) => !options.requireAcceptedAnswer || record.acceptedAnswer !== undefined)
+      .filter((record) => !options.requireStaffReply || record.staffReplies.length > 0)
       .map((record) => ({ record, relevance: relevance(record, terms) }))
       .filter((entry) => entry.relevance > 0)
       .sort((a, b) => b.relevance - a.relevance || b.record.score - a.record.score)
       .slice(0, limit)
       .map((entry) => project(entry.record));
 
-    return { query: options.query, results };
-  }
-
-  // Fallback: per-call LMDB scan (used when no Indexer is registered, e.g. in unit tests).
-  const keys = (await store.keys()).filter((key) => key.startsWith("devforum:"));
-  if (keys.length === 0) {
     return {
       query: options.query,
-      results: [],
-      message:
-        "No local DevForum records found. Run `npx rodocsmcp --seed-devforum` to seed curated DevForum content.",
+      results,
     };
+  } finally {
+    observe({ event: "search.query", source: "devforum", durationMs: elapsed() });
   }
-
-  const records = (await Promise.all(keys.map((key) => store.get<DevForumRecord>(key)))).filter(
-    (record): record is DevForumRecord => record !== null,
-  );
-
-  const minScore = options.minScore ?? DEFAULT_MIN_SCORE;
-  const limit = clampLimit(options.limit);
-  const terms = queryTerms(options.query);
-
-  const results = records
-    .filter((record) => record.score >= minScore)
-    .filter((record) => hasAllTags(record, options.tags))
-    .filter((record) => !options.requireAcceptedAnswer || record.acceptedAnswer !== undefined)
-    .filter((record) => !options.requireStaffReply || record.staffReplies.length > 0)
-    .map((record) => ({ record, relevance: relevance(record, terms) }))
-    .filter((entry) => entry.relevance > 0)
-    .sort((a, b) => b.relevance - a.relevance || b.record.score - a.record.score)
-    .slice(0, limit)
-    .map((entry) => project(entry.record));
-
-  return {
-    query: options.query,
-    results,
-  };
 }

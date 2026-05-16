@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { decode, encode } from "@msgpack/msgpack";
 import type { BM25, BM25Doc } from "../search/bm25.js";
+import { observe, startTimer } from "../utils/logger.js";
 import type { LmdbStore, SyncStateManager } from "./index.js";
 
 interface SerializedIndex {
@@ -75,6 +76,7 @@ export class Indexer {
    * Deletes the persisted index and notifies any registered in-memory invalidation callbacks.
    */
   async clear(source: string): Promise<void> {
+    observe({ event: "indexer.clear", source });
     try {
       await writeFile(this.getIndexPath(source), "");
     } catch (_error) {
@@ -90,7 +92,9 @@ export class Indexer {
     const loaded = await this.load(bm25, _source);
     if (loaded) return;
 
+    const elapsed = startTimer();
     await builder();
     await this.save(bm25, _source);
+    observe({ event: "indexer.rebuild", source: _source, durationMs: elapsed() });
   }
 }

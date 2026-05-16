@@ -4,6 +4,7 @@ import { fetchGuideIndex } from "../scraper/guides.js";
 import type { LmdbStore, SyncStateManager } from "../store/index.js";
 import { Indexer } from "../store/indexer.js";
 import type { BM25Doc, SearchOptions, SearchResult } from "../types/index.js";
+import { observe, startTimer } from "../utils/logger.js";
 import { expandQuery, resolveAliases, resolveLuauSynonyms } from "./aliases.js";
 import { BM25 } from "./bm25.js";
 import { findClosestMatch } from "./fuzzy.js";
@@ -117,6 +118,7 @@ function buildApiIndex(githubToken?: string): Promise<void> {
 
   apiIndexing = (async (): Promise<void> => {
     const build = async () => {
+      const elapsed = startTimer();
       const {
         classes,
         datatypes = [],
@@ -150,6 +152,7 @@ function buildApiIndex(githubToken?: string): Promise<void> {
       }
 
       apiBM25.index(docs);
+      observe({ event: "search.rebuild", source: "api", durationMs: elapsed() });
     };
 
     if (indexer) {
@@ -170,6 +173,7 @@ function buildGuideIndex(githubToken?: string): Promise<void> {
 
   guideIndexing = (async (): Promise<void> => {
     const build = async () => {
+      const elapsed = startTimer();
       const entries = await fetchGuideIndex(githubToken);
       const docs: BM25Doc[] = [];
 
@@ -186,6 +190,7 @@ function buildGuideIndex(githubToken?: string): Promise<void> {
       }
 
       guideBM25.index(docs);
+      observe({ event: "search.rebuild", source: "guides", durationMs: elapsed() });
     };
 
     if (indexer) {
@@ -206,20 +211,25 @@ export async function searchApis(
   limit = 10,
   githubToken?: string,
 ): Promise<readonly SearchResult[]> {
-  await buildApiIndex(githubToken);
+  const elapsed = startTimer();
+  try {
+    await buildApiIndex(githubToken);
 
-  const exact = findExactApiName(query);
-  const results = uniqueByName([
-    ...(exact !== undefined ? [projectApiResult(exact, 100)] : []),
-    ...applyQueryExpansion(apiBM25, query, limit, (r) => projectApiResult(r.id, r.score)),
-  ]).filter((r) => r.score >= API_SCORE_THRESHOLD);
+    const exact = findExactApiName(query);
+    const results = uniqueByName([
+      ...(exact !== undefined ? [projectApiResult(exact, 100)] : []),
+      ...applyQueryExpansion(apiBM25, query, limit, (r) => projectApiResult(r.id, r.score)),
+    ]).filter((r) => r.score >= API_SCORE_THRESHOLD);
 
-  if (results.length > 0) return results;
+    if (results.length > 0) return results;
 
-  const closest = findClosestMatch(query, [...apiCategories.keys()]);
-  if (closest === null) return [];
+    const closest = findClosestMatch(query, [...apiCategories.keys()]);
+    if (closest === null) return [];
 
-  return [projectApiResult(closest, API_SCORE_THRESHOLD)];
+    return [projectApiResult(closest, API_SCORE_THRESHOLD)];
+  } finally {
+    observe({ event: "search.query", source: "api", durationMs: elapsed() });
+  }
 }
 
 export async function searchApisLocal(query: string, limit = 10): Promise<readonly SearchResult[]> {
@@ -242,50 +252,55 @@ export async function searchGuides(
   limit = 10,
   githubToken?: string,
 ): Promise<readonly SearchResult[]> {
-  await buildGuideIndex(githubToken);
+  const elapsed = startTimer();
+  try {
+    await buildGuideIndex(githubToken);
 
-  const resolvedQuery = resolveLuauSynonyms(query);
+    const resolvedQuery = resolveLuauSynonyms(query);
 
-  const results = applyQueryExpansion(guideBM25, resolvedQuery, limit, (r): SearchResult => {
-    const meta = guideMetaById.get(r.id);
-    const category = meta?.category ?? r.id.split("/")[0] ?? "unknown";
+    const results = applyQueryExpansion(guideBM25, resolvedQuery, limit, (r): SearchResult => {
+      const meta = guideMetaById.get(r.id);
+      const category = meta?.category ?? r.id.split("/")[0] ?? "unknown";
 
-    return {
-      type: "guide",
-      name: r.id,
-      path: r.id,
-      score: r.score,
-      category,
-      ...(meta?.title ? { title: meta.title } : {}),
-      ...(meta?.description ? { description: meta.description } : {}),
-    };
-  }).filter((r) => r.score >= guideScoreThreshold);
+      return {
+        type: "guide",
+        name: r.id,
+        path: r.id,
+        score: r.score,
+        category,
+        ...(meta?.title ? { title: meta.title } : {}),
+        ...(meta?.description ? { description: meta.description } : {}),
+      };
+    }).filter((r) => r.score >= guideScoreThreshold);
 
-  if (results.length > 0) return results;
+    if (results.length > 0) return results;
 
-  const candidates = [...guideMetaById.values()].flatMap((meta) => [meta.path, meta.title]);
-  const closest = findClosestMatch(
-    resolvedQuery,
-    candidates.filter((candidate) => candidate.length > 0),
-  );
-  if (closest === null) return [];
+    const candidates = [...guideMetaById.values()].flatMap((meta) => [meta.path, meta.title]);
+    const closest = findClosestMatch(
+      resolvedQuery,
+      candidates.filter((candidate) => candidate.length > 0),
+    );
+    if (closest === null) return [];
 
-  const meta = [...guideMetaById.values()].find(
-    (entry) => entry.path === closest || entry.title === closest,
-  );
-  if (meta === undefined) return [];
+    const meta = [...guideMetaById.values()].find(
+      (entry) => entry.path === closest || entry.title === closest,
+    );
+    if (meta === undefined) return [];
 
-  return [
-    {
-      type: "guide",
-      name: meta.path,
-      path: meta.path,
-      score: guideScoreThreshold,
-      category: meta.category,
-      ...(meta.title ? { title: meta.title } : {}),
-      ...(meta.description ? { description: meta.description } : {}),
-    },
-  ];
+    return [
+      {
+        type: "guide",
+        name: meta.path,
+        path: meta.path,
+        score: guideScoreThreshold,
+        category: meta.category,
+        ...(meta.title ? { title: meta.title } : {}),
+        ...(meta.description ? { description: meta.description } : {}),
+      },
+    ];
+  } finally {
+    observe({ event: "search.query", source: "guides", durationMs: elapsed() });
+  }
 }
 
 export async function searchGuidesLocal(

@@ -2,6 +2,7 @@ import type { BM25Doc } from "../search/bm25.js";
 import { BM25 } from "../search/bm25.js";
 import type { LmdbStore } from "../store/index.js";
 import type { Indexer } from "../store/indexer.js";
+import { observe, startTimer } from "../utils/logger.js";
 import type { FastFlag } from "./parser.js";
 
 export interface FastFlagSearchOptions {
@@ -53,6 +54,7 @@ export class FastFlagSearch {
   }
 
   private async buildIndex(): Promise<void> {
+    const elapsed = startTimer();
     const keys = (await this.store.keys()).filter((k) => k.startsWith("fastflags:"));
     const flags: FastFlag[] = [];
     const docs: BM25Doc[] = [];
@@ -73,43 +75,49 @@ export class FastFlagSearch {
 
     _cachedFlags = flags;
     _bm25.index(docs);
+    observe({ event: "search.rebuild", source: "fastflags", durationMs: elapsed() });
   }
 
   /**
    * Searches for FastFlags based on the provided filters.
    */
   async search(options: FastFlagSearchOptions): Promise<FastFlag[]> {
-    await this.ensureIndex();
+    const elapsed = startTimer();
+    try {
+      await this.ensureIndex();
 
-    if (_cachedFlags.length === 0) return [];
+      if (_cachedFlags.length === 0) return [];
 
-    let flags = [..._cachedFlags];
+      let flags = [..._cachedFlags];
 
-    if (options.kind) flags = flags.filter((f) => f.kind === options.kind);
-    if (options.behavior) flags = flags.filter((f) => f.behavior === options.behavior);
-    if (options.platform) {
-      const platform = options.platform;
-      flags = flags.filter((f) => f.platforms.includes(platform));
+      if (options.kind) flags = flags.filter((f) => f.kind === options.kind);
+      if (options.behavior) flags = flags.filter((f) => f.behavior === options.behavior);
+      if (options.platform) {
+        const platform = options.platform;
+        flags = flags.filter((f) => f.platforms.includes(platform));
+      }
+
+      if (options.query) {
+        const bm25Results = _bm25.search(options.query, flags.length);
+        if (bm25Results.length === 0) return [];
+
+        const scoreMap = new Map(bm25Results.map((r) => [r.id, r.score]));
+        flags = flags.filter((f) => scoreMap.has(f.name));
+
+        const query = options.query.toLowerCase();
+        flags.sort((a, b) => {
+          const aExact = a.name.toLowerCase() === query ? 1 : 0;
+          const bExact = b.name.toLowerCase() === query ? 1 : 0;
+          if (aExact !== bExact) return bExact - aExact;
+          return (scoreMap.get(b.name) ?? 0) - (scoreMap.get(a.name) ?? 0);
+        });
+      } else {
+        flags.sort((a, b) => a.name.localeCompare(b.name));
+      }
+
+      return flags.slice(0, options.limit ?? 50);
+    } finally {
+      observe({ event: "search.query", source: "fastflags", durationMs: elapsed() });
     }
-
-    if (options.query) {
-      const bm25Results = _bm25.search(options.query, flags.length);
-      if (bm25Results.length === 0) return [];
-
-      const scoreMap = new Map(bm25Results.map((r) => [r.id, r.score]));
-      flags = flags.filter((f) => scoreMap.has(f.name));
-
-      const query = options.query.toLowerCase();
-      flags.sort((a, b) => {
-        const aExact = a.name.toLowerCase() === query ? 1 : 0;
-        const bExact = b.name.toLowerCase() === query ? 1 : 0;
-        if (aExact !== bExact) return bExact - aExact;
-        return (scoreMap.get(b.name) ?? 0) - (scoreMap.get(a.name) ?? 0);
-      });
-    } else {
-      flags.sort((a, b) => a.name.localeCompare(b.name));
-    }
-
-    return flags.slice(0, options.limit ?? 50);
   }
 }

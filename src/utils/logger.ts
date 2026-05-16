@@ -31,3 +31,29 @@ export const logger = {
     }
   },
 };
+
+export interface LogEvent {
+  event: string;
+  source: string;
+  hit?: boolean;
+  durationMs?: number;
+  key?: string;
+  strategy?: string;
+  metadata?: Record<string, unknown>;
+}
+
+let _testSink: ((event: LogEvent) => void) | null = null;
+
+export function _setLogEventSinkForTesting(sink: ((event: LogEvent) => void) | null): void {
+  _testSink = sink;
+}
+
+export function startTimer(): () => number {
+  const t = performance.now();
+  return () => Math.round(performance.now() - t);
+}
+
+export function observe(event: LogEvent): void {
+  _testSink?.(event);
+  logger.debug(event);
+}

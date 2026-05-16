@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LmdbStore } from "../../store/index.js";
 import type { Indexer } from "../../store/indexer.js";
+import { _setLogEventSinkForTesting, type LogEvent } from "../../utils/logger.js";
 import {
   _resetDevForumIndexForTesting,
   initDevForumSearch,
@@ -331,5 +332,108 @@ describe("searchDevForumStore (cached path — with Indexer)", () => {
 
     expect(result.results).toHaveLength(1);
     expect(result.results[0]?.tags).toContain("data-store");
+  });
+});
+
+describe("searchDevForumStore observability", () => {
+  let captured: LogEvent[];
+
+  function makeRecord(overrides: Partial<DevForumRecord> = {}): DevForumRecord {
+    return {
+      id: 1,
+      title: "DataStore issue",
+      url: "https://devforum.roblox.com/t/1",
+      content: "DataStore UpdateAsync problem",
+      acceptedAnswer: "Use retries.",
+      staffReplies: [],
+      codeSnippets: [],
+      tags: ["scripting"],
+      score: 85,
+      source: "search:datastore",
+      lastSyncAt: Date.UTC(2026, 0, 1),
+      ...overrides,
+    };
+  }
+
+  function storeWith(records: DevForumRecord[]): LmdbStore {
+    const data = new Map<string, unknown>(records.map((r) => [`devforum:${r.id}`, r]));
+    return {
+      async keys() {
+        return [...data.keys()];
+      },
+      async get<T>(key: string): Promise<T | null> {
+        return (data.get(key) as T | undefined) ?? null;
+      },
+    } as unknown as LmdbStore;
+  }
+
+  beforeEach(() => {
+    _resetDevForumIndexForTesting();
+    captured = [];
+    _setLogEventSinkForTesting((e) => captured.push(e));
+  });
+
+  afterEach(() => {
+    _resetDevForumIndexForTesting();
+    _setLogEventSinkForTesting(null);
+  });
+
+  it("emits search.query with source=devforum on every call", async () => {
+    const store = storeWith([makeRecord()]);
+
+    await searchDevForumStore(store, { query: "DataStore" });
+
+    const event = captured.find((e) => e.event === "search.query");
+    expect(event).toMatchObject({ event: "search.query", source: "devforum" });
+    expect(typeof event?.durationMs).toBe("number");
+  });
+
+  it("emits search.query even when result set is empty", async () => {
+    const store = storeWith([]);
+
+    await searchDevForumStore(store, { query: "anything" });
+
+    expect(captured.some((e) => e.event === "search.query")).toBe(true);
+  });
+
+  it("emits exactly one search.query per call", async () => {
+    const store = storeWith([makeRecord()]);
+
+    await searchDevForumStore(store, { query: "DataStore" });
+
+    expect(captured.filter((e) => e.event === "search.query")).toHaveLength(1);
+  });
+
+  it("emits search.rebuild with source=devforum when BM25 index is built via Indexer path", async () => {
+    const fakeIndexer = {
+      onClear: (_source: string, cb: () => void) => {
+        void cb;
+      },
+    } as unknown as Indexer;
+
+    const store = storeWith([makeRecord()]);
+    initDevForumSearch(fakeIndexer);
+
+    await searchDevForumStore(store, { query: "DataStore" });
+
+    const event = captured.find((e) => e.event === "search.rebuild");
+    expect(event).toMatchObject({ event: "search.rebuild", source: "devforum" });
+    expect(typeof event?.durationMs).toBe("number");
+  });
+
+  it("does not emit search.rebuild on subsequent calls when index is cached", async () => {
+    const fakeIndexer = {
+      onClear: (_source: string, _cb: () => void) => {},
+    } as unknown as Indexer;
+
+    const store = storeWith([makeRecord()]);
+    initDevForumSearch(fakeIndexer);
+
+    await searchDevForumStore(store, { query: "DataStore" });
+    captured = [];
+
+    await searchDevForumStore(store, { query: "DataStore" });
+
+    expect(captured.some((e) => e.event === "search.rebuild")).toBe(false);
   });
 });

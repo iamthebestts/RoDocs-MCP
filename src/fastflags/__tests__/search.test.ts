@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LmdbStore } from "../../store/index.js";
 import type { Indexer } from "../../store/indexer.js";
+import { _setLogEventSinkForTesting, type LogEvent } from "../../utils/logger.js";
 import type { FastFlag } from "../parser.js";
 import { _resetFastFlagsIndexForTesting, FastFlagSearch } from "../search.js";
 
@@ -39,12 +40,17 @@ function asStore(mock: MockStore): LmdbStore {
 }
 
 describe("FastFlagSearch", () => {
+  let captured: LogEvent[];
+
   beforeEach(() => {
     _resetFastFlagsIndexForTesting();
+    captured = [];
+    _setLogEventSinkForTesting((e) => captured.push(e));
   });
 
   afterEach(() => {
     _resetFastFlagsIndexForTesting();
+    _setLogEventSinkForTesting(null);
   });
 
   describe("basic search", () => {
@@ -221,6 +227,51 @@ describe("FastFlagSearch", () => {
 
       await searcher.search({ query: "Original" });
       expect(keysSpy).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("observability", () => {
+    it("emits search.query with source=fastflags and durationMs on every search call", async () => {
+      const store = asStore(new MockStore([makeFlag({ name: "FFlagA" })]));
+      const searcher = new FastFlagSearch(store);
+
+      await searcher.search({ query: "FFlagA" });
+
+      const event = captured.find((e) => e.event === "search.query");
+      expect(event).toMatchObject({ event: "search.query", source: "fastflags" });
+      expect(typeof event?.durationMs).toBe("number");
+    });
+
+    it("emits search.rebuild with source=fastflags when building the index for the first time", async () => {
+      const store = asStore(new MockStore([makeFlag({ name: "FFlagA" })]));
+      const searcher = new FastFlagSearch(store);
+
+      await searcher.search({});
+
+      const event = captured.find((e) => e.event === "search.rebuild");
+      expect(event).toMatchObject({ event: "search.rebuild", source: "fastflags" });
+      expect(typeof event?.durationMs).toBe("number");
+    });
+
+    it("does not emit search.rebuild on a cache hit (index already built)", async () => {
+      const store = asStore(new MockStore([makeFlag({ name: "FFlagA" })]));
+      const searcher = new FastFlagSearch(store);
+
+      await searcher.search({});
+      captured = [];
+
+      await searcher.search({});
+
+      expect(captured.some((e) => e.event === "search.rebuild")).toBe(false);
+    });
+
+    it("emits exactly one search.query per search() call", async () => {
+      const store = asStore(new MockStore([makeFlag({ name: "FFlagA" })]));
+      const searcher = new FastFlagSearch(store);
+
+      await searcher.search({ query: "FFlagA" });
+
+      expect(captured.filter((e) => e.event === "search.query")).toHaveLength(1);
     });
   });
 });

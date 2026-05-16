@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { BM25 } from "../../search/bm25.js";
+import { _setLogEventSinkForTesting, type LogEvent } from "../../utils/logger.js";
 import { LmdbStore, SyncStateManager } from "../index.js";
 import { Indexer } from "../indexer.js";
 
@@ -12,6 +13,7 @@ describe("Indexer", () => {
   let tempDir: string;
   let store: LmdbStore;
   let syncManager: SyncStateManager;
+  let captured: LogEvent[];
 
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), "rodocs-indexer-test-"));
@@ -20,9 +22,12 @@ describe("Indexer", () => {
     syncManager = new SyncStateManager(store);
     indexer = new Indexer(store, syncManager);
     bm25 = new BM25();
+    captured = [];
+    _setLogEventSinkForTesting((e) => captured.push(e));
   });
 
   afterEach(async () => {
+    _setLogEventSinkForTesting(null);
     await store.close();
     await rm(tempDir, { recursive: true, force: true });
   });
@@ -79,5 +84,56 @@ describe("Indexer", () => {
     await indexer.clear("sourceB");
 
     expect(called).toBe(false);
+  });
+
+  describe("observability", () => {
+    it("emits indexer.clear with the correct source when clear() is called", async () => {
+      await indexer.clear("api");
+
+      const event = captured.find((e) => e.event === "indexer.clear");
+      expect(event).toMatchObject({ event: "indexer.clear", source: "api" });
+    });
+
+    it("emits indexer.clear before invoking onClear callbacks", async () => {
+      const order: string[] = [];
+      indexer.onClear("api", () => order.push("callback"));
+
+      await indexer.clear("api");
+
+      expect(captured.find((e) => e.event === "indexer.clear")).toBeDefined();
+      expect(order).toContain("callback");
+    });
+
+    it("emits indexer.rebuild with source and durationMs when building from scratch", async () => {
+      bm25.index([{ id: "doc1", fields: { title: "Roblox API" } }]);
+      const builder = async () => {
+        bm25.index([{ id: "doc2", fields: { title: "New Doc" } }]);
+      };
+
+      const freshBm25 = new BM25();
+      await indexer.loadOrBuildIndex("api", freshBm25, builder);
+
+      const event = captured.find((e) => e.event === "indexer.rebuild");
+      expect(event).toMatchObject({ event: "indexer.rebuild", source: "api" });
+      expect(typeof event?.durationMs).toBe("number");
+    });
+
+    it("does not emit indexer.rebuild when loading from persisted cache", async () => {
+      bm25.index([{ id: "doc1", fields: { title: "Cached Doc" } }]);
+      await indexer.save(bm25, "api");
+      captured = [];
+
+      const freshBm25 = new BM25();
+      const builder = async () => {};
+      await indexer.loadOrBuildIndex("api", freshBm25, builder);
+
+      expect(captured.some((e) => e.event === "indexer.rebuild")).toBe(false);
+    });
+
+    it("emits exactly one indexer.clear per clear() call", async () => {
+      await indexer.clear("api");
+
+      expect(captured.filter((e) => e.event === "indexer.clear")).toHaveLength(1);
+    });
   });
 });

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { observe, startTimer } from "../utils/logger.js";
 import { getEngineVersionHash } from "./fetch.js";
 
 const CACHE_DIR = join(homedir(), ".cache", "rodocsmcp");
@@ -19,6 +20,7 @@ function makeCacheKey(topic: string): string {
 
 export class DiskCache<T> {
   async get(topic: string): Promise<T | undefined> {
+    const elapsed = startTimer();
     const key = makeCacheKey(topic);
     const filePath = join(CACHE_DIR, `${key}.json`);
     try {
@@ -26,10 +28,13 @@ export class DiskCache<T> {
       const entry = JSON.parse(raw) as DiskEntry<T>;
       if (Date.now() > entry.expiresAt) {
         await unlink(filePath).catch(() => undefined);
+        observe({ event: "cache.miss", source: "disk", key: topic, durationMs: elapsed() });
         return undefined;
       }
+      observe({ event: "cache.hit", source: "disk", hit: true, key: topic, durationMs: elapsed() });
       return entry.value;
     } catch {
+      observe({ event: "cache.miss", source: "disk", key: topic, durationMs: elapsed() });
       return undefined;
     }
   }
@@ -41,6 +46,7 @@ export class DiskCache<T> {
     try {
       await mkdir(CACHE_DIR, { recursive: true });
       await writeFile(filePath, JSON.stringify(entry), "utf-8");
+      observe({ event: "cache.write", source: "disk", key: topic });
     } catch {
       // silently continue — memory cache still works
     }
