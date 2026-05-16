@@ -100,6 +100,14 @@ Vitest coverage only tracks `src/search/`, `src/scraper/`, `src/devforum/`, `src
 
 ---
 
+## Development Workflow
+
+### Refactors and Features
+- **Mandatory TDD**: All refactors and new features must be implemented using the `tdd` skill. Follow the Red-Green-Refactor loop.
+- **Singleton Enforcement**: Strict adherence to Singleton patterns for BM25/Indexer. Any module exporting a singleton MUST export `_reset*ForTesting()` and it MUST be called in `beforeEach` in all consuming tests. No exceptions.
+
+---
+
 ## Coding standards
 
 ### TypeScript
