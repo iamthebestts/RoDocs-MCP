@@ -49,6 +49,61 @@ describe("MemoryCache", () => {
     expect(cache.size).toBe(0);
   });
 
+  describe("LRU eviction", () => {
+    it("evicts the least-recently-used entry when maxEntries is exceeded", () => {
+      const cache = new MemoryCache<string>(10_000, "l1", 2);
+      cache.set("a", "alpha");
+      cache.set("b", "beta");
+      cache.set("c", "gamma"); // "a" is LRU → evicted
+
+      expect(cache.get("a")).toBeUndefined();
+      expect(cache.get("b")).toBe("beta");
+      expect(cache.get("c")).toBe("gamma");
+      expect(cache.size).toBe(2);
+    });
+
+    it("promotes a read entry to MRU so it is not evicted first", () => {
+      const cache = new MemoryCache<string>(10_000, "l1", 2);
+      cache.set("a", "alpha");
+      cache.set("b", "beta");
+      cache.get("a"); // access "a" → moves to MRU
+      cache.set("c", "gamma"); // "b" is now LRU → evicted
+
+      expect(cache.get("a")).toBe("alpha");
+      expect(cache.get("b")).toBeUndefined();
+      expect(cache.get("c")).toBe("gamma");
+    });
+
+    it("rewriting an existing key moves it to MRU", () => {
+      const cache = new MemoryCache<string>(10_000, "l1", 2);
+      cache.set("a", "alpha");
+      cache.set("b", "beta");
+      cache.set("a", "alpha-v2"); // rewrite "a" → MRU
+      cache.set("c", "gamma"); // "b" is LRU → evicted
+
+      expect(cache.get("a")).toBe("alpha-v2");
+      expect(cache.get("b")).toBeUndefined();
+      expect(cache.get("c")).toBe("gamma");
+    });
+
+    it("emits cache.evict when an entry is evicted by LRU", () => {
+      const cache = new MemoryCache<string>(10_000, "l1", 1);
+      cache.set("a", "alpha");
+      captured = [];
+      cache.set("b", "beta"); // evicts "a"
+
+      expect(captured.some((e) => e.event === "cache.evict" && e.key === "a")).toBe(true);
+    });
+
+    it("keeps size bounded at maxEntries under sustained writes", () => {
+      const cache = new MemoryCache<string>(10_000, "l1", 3);
+      for (let i = 0; i < 10; i++) {
+        cache.set(`key${i}`, `val${i}`);
+      }
+      expect(cache.size).toBe(3);
+    });
+  });
+
   describe("observability", () => {
     it("emits cache.hit on a successful get", () => {
       const cache = new MemoryCache<string>(10_000, "l1");

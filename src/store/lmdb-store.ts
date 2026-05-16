@@ -104,40 +104,6 @@ export class LmdbStore {
   }
 
   /**
-   * Get multiple values by keys
-   */
-  async getMany<T = unknown>(keys: string[]): Promise<Array<T | null>> {
-    this.ensureOpen();
-    const results: Array<T | null> = [];
-
-    for (const key of keys) {
-      try {
-        const value = await this.getDb().get(key);
-        results.push(value !== undefined ? (value as T) : null);
-      } catch (error) {
-        throw new Error(
-          `Failed to get key "${key}" from LMDB: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-    }
-
-    return results;
-  }
-
-  /**
-   * Put multiple key-value pairs
-   */
-  async putMany<T = unknown>(entries: Array<{ key: string; value: T }>): Promise<void> {
-    this.ensureOpen();
-
-    // Simple implementation using individual puts
-    // In a future version we could use proper transactions for atomicity
-    for (const { key, value } of entries) {
-      await this.put(key, value);
-    }
-  }
-
-  /**
    * Close the database connection
    */
   async close(): Promise<void> {

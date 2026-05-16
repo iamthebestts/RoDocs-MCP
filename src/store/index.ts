@@ -5,12 +5,10 @@
 import { Indexer } from "./indexer.js";
 import { LmdbStore, type LmdbStoreOptions } from "./lmdb-store.js";
 import { SyncStateManager } from "./sync-state.js";
-import { WriteQueue } from "./write-queue.js";
 
 export type { SyncState } from "./sync-state.js";
-export type { WriteOp } from "./write-queue.js";
 export type { LmdbStoreOptions };
-export { Indexer, LmdbStore, SyncStateManager, WriteQueue };
+export { Indexer, LmdbStore, SyncStateManager };
 
 /**
  * Factory function to create a store with default options

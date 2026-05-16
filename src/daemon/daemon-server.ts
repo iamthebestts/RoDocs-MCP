@@ -228,13 +228,10 @@ function serializeStoreWrites(store: LmdbStore): void {
   };
 
   const put = store.put.bind(store);
-  const putMany = store.putMany.bind(store);
   const del = store.del.bind(store);
   const clear = store.clear.bind(store);
 
   store.put = <T = unknown>(key: string, value: T) => enqueue(() => put(key, value));
-  store.putMany = <T = unknown>(entries: Array<{ key: string; value: T }>) =>
-    enqueue(() => putMany(entries));
   store.del = (key: string) => enqueue(() => del(key));
   store.clear = () => enqueue(() => clear());
 }

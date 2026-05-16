@@ -1,3 +1,4 @@
+import { getCachedDevForumRecords } from "../devforum/search.js";
 import type { DevForumRecord } from "../devforum/types.js";
 import type { FastFlag } from "../fastflags/parser.js";
 import { FastFlagSearch } from "../fastflags/search.js";
@@ -108,17 +109,26 @@ function ageDays(record: DevForumRecord): number {
   return Math.max(0, (Date.now() - record.lastSyncAt) / 86_400_000);
 }
 
+async function fetchDevForumRecords(store: LmdbStore): Promise<readonly DevForumRecord[]> {
+  // Use the singleton cache when the DevForum index has been pre-warmed,
+  // avoiding a full LMDB key-scan + record fetch on every search call.
+  const cached = getCachedDevForumRecords();
+  if (cached.length > 0) return cached;
+
+  const keys = (await store.keys()).filter((key) => key.startsWith("devforum:"));
+  const records = (await Promise.all(keys.map((key) => store.get<DevForumRecord>(key)))).filter(
+    (record): record is DevForumRecord => record !== null,
+  );
+  return records;
+}
+
 async function searchDevForum(
   store: LmdbStore,
   query: string,
   limit: number,
 ): Promise<readonly DevForumSearchResult[]> {
-  const keys = (await store.keys()).filter((key) => key.startsWith("devforum:"));
-  if (keys.length === 0) return [];
-
-  const records = (await Promise.all(keys.map((key) => store.get<DevForumRecord>(key)))).filter(
-    (record): record is DevForumRecord => record !== null,
-  );
+  const records = await fetchDevForumRecords(store);
+  if (records.length === 0) return [];
 
   const docs: BM25Doc[] = records.map((record) => ({
     id: String(record.id),

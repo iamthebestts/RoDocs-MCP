@@ -13,7 +13,6 @@ class FakeStore {
   get = vi.fn(async () => null);
   keys = vi.fn(async () => []);
   put = vi.fn(async (_key: string, _value: unknown) => {});
-  putMany = vi.fn(async (_entries: Array<{ key: string; value: unknown }>) => {});
   del = vi.fn(async (_key: string) => {});
   clear = vi.fn(async () => {});
 }

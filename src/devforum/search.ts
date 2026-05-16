@@ -31,6 +31,14 @@ export function _resetDevForumIndexForTesting(): void {
   _indexer = null;
 }
 
+/**
+ * Returns the currently cached DevForum records without triggering a build.
+ * Returns an empty array when the singleton has not been initialized yet.
+ */
+export function getCachedDevForumRecords(): readonly DevForumRecord[] {
+  return _cachedRecords;
+}
+
 export interface DevForumSearchOptions {
   query: string;
   tags?: string[] | undefined;
