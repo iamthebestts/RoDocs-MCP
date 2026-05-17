@@ -355,6 +355,7 @@ function printHelp(): void {
       `  ${c("green", "rodocsmcp")} ${c("yellow", "--guide <path>")}            Fetch a guide by path`,
       `  ${c("green", "rodocsmcp")} ${c("yellow", "--search-guide <query>")}    Search guides by keyword`,
       `  ${c("green", "rodocsmcp")} ${c("yellow", "--setup <provider>")}        Configure MCP in IDE/editor`,
+      `  ${c("green", "rodocsmcp")} ${c("yellow", "--setup <provider> --local")}  Configure MCP locally (project scope)`,
       `  ${c("green", "rodocsmcp")} ${c("yellow", "--github-token <token>")}    Authenticate GitHub requests`,
       "",
       `  ${dim("Maintenance:")}`,
@@ -373,6 +374,7 @@ function printHelp(): void {
       `  ${dim("$")} rodocsmcp --search-guide "data store"`,
       `  ${dim("$")} rodocsmcp --guide scripting/data/data-stores.md`,
       `  ${dim("$")} rodocsmcp --setup claude`,
+      `  ${dim("$")} rodocsmcp --setup claude-code --local`,
       `  ${dim("$")} rodocsmcp --seed-fastflags`,
 
       "",
@@ -532,12 +534,13 @@ export async function main(
     const provider = args[1];
     if (!provider) {
       process.stderr.write(
-        `${c("red", "✖")} --setup requires a provider (claude, cursor, vscode, codex, opencode).\n`,
+        `${c("red", "✖")} --setup requires a provider (claude-code, claude, opencode, codex, gemini, cursor, vscode).\n`,
       );
       process.exit(1);
     }
     const daemon = args.includes("--daemon");
-    await runSetup(provider, daemon, githubToken);
+    const local = args.includes("--local");
+    await runSetup(provider, daemon, githubToken, local);
     return;
   }
 
