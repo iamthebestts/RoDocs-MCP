@@ -1,5 +1,5 @@
 import { resolveGithubToken } from "../utils/github-token.js";
-import { observe } from "../utils/logger.js";
+import { observe, startTimer } from "../utils/logger.js";
 import { MemoryCache } from "./cache.js";
 import { DiskCache } from "./disk-cache.js";
 import type { RobloxDocEntry } from "./fetch.js";
@@ -95,8 +95,15 @@ export async function scrapeTopic(topic: string, githubToken?: string): Promise<
   }
 
   // Fetch from network
-  observe({ event: "scraper.fallback", source: "scraper", key: topic, strategy: "network" });
+  const elapsed = startTimer();
   const entry = await fetchTopic(topic, githubToken);
+  observe({
+    event: "scraper.fallback",
+    source: "scraper",
+    key: topic,
+    strategy: "network",
+    durationMs: elapsed(),
+  });
 
   memCache.set(topic, entry);
   if (entry.class.name !== topic) {

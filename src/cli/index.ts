@@ -4,6 +4,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { runDaemonClient, startDaemonServer } from "../daemon/index.js";
 import { DevForumPipeline } from "../devforum/pipeline.js";
 import { FastFlagScraper } from "../fastflags/scraper.js";
+import { MetricsCollector } from "../metrics/collector.js";
+import { formatMetricsReport } from "../metrics/reporter.js";
 import type {
   CodeSample,
   InheritedGroup,
@@ -17,6 +19,7 @@ import { createServer } from "../server/index.js";
 import { createSyncStateManager, LmdbStore } from "../store/index.js";
 import { Indexer } from "../store/indexer.js";
 import { parseGithubTokenArgs } from "../utils/github-token.js";
+import { _setMetricsSink } from "../utils/logger.js";
 import { runSetup } from "./setup.js";
 
 const W = 76;
@@ -390,11 +393,23 @@ async function runMcpServer(githubToken?: string): Promise<void> {
   await server.connect(transport);
   process.stderr.write("rodocsmcp MCP server ready (stdio)\n");
 
+  const intervalMs = Number(process.env.METRICS_INTERVAL_MS ?? 300_000);
+  let metricsTimer: ReturnType<typeof setInterval> | undefined;
+  if (intervalMs > 0) {
+    metricsTimer = setInterval(() => {
+      const snap = MetricsCollector.getInstance().snapshot();
+      process.stderr.write(`[METRICS] ${JSON.stringify(snap)}\n`);
+    }, intervalMs);
+    metricsTimer.unref();
+  }
+
   process.on("SIGINT", () => {
+    if (metricsTimer) clearInterval(metricsTimer);
     shutdown();
     process.exit(0);
   });
   process.on("SIGTERM", () => {
+    if (metricsTimer) clearInterval(metricsTimer);
     shutdown();
     process.exit(0);
   });
@@ -521,6 +536,9 @@ export async function main(
   argv: readonly string[] = process.argv.slice(2),
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<void> {
+  const metrics = MetricsCollector.getInstance();
+  _setMetricsSink((event) => metrics.record(event));
+
   const { args, githubToken } = parseGithubTokenArgs(argv, env);
 
   if (args.length === 0 || args.includes("--stdio")) {
@@ -629,6 +647,12 @@ export async function main(
       );
       process.exit(1);
     }
+    return;
+  }
+
+  if (first === "--metrics") {
+    const snap = MetricsCollector.getInstance().snapshot();
+    process.stdout.write(`${formatMetricsReport(snap)}\n`);
     return;
   }
 

@@ -27,6 +27,7 @@ export class MemoryCache<T> {
     }
     if (Date.now() > entry.expiresAt) {
       this.store.delete(key);
+      observe({ event: "cache.evict", source: this.label, key, metadata: { reason: "ttl" } });
       observe({ event: "cache.miss", source: this.label, key, durationMs: elapsed() });
       return undefined;
     }
@@ -46,12 +47,22 @@ export class MemoryCache<T> {
       // At capacity: evict the LRU entry (first key in Map insertion order).
       for (const lruKey of this.store.keys()) {
         this.store.delete(lruKey);
-        observe({ event: "cache.evict", source: this.label, key: lruKey });
+        observe({
+          event: "cache.evict",
+          source: this.label,
+          key: lruKey,
+          metadata: { reason: "lru" },
+        });
         break;
       }
     }
     this.store.set(key, { value, expiresAt: Date.now() + this.ttlMs });
-    observe({ event: "cache.write", source: this.label, key });
+    observe({
+      event: "cache.write",
+      source: this.label,
+      key,
+      metadata: { currentSize: this.store.size, maxSize: this.maxEntries },
+    });
   }
 
   has(key: string): boolean {

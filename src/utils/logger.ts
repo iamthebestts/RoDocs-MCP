@@ -55,5 +55,12 @@ export function startTimer(): () => number {
 
 export function observe(event: LogEvent): void {
   _testSink?.(event);
+  _metricsSink?.(event);
   logger.debug(event);
+}
+
+let _metricsSink: ((event: LogEvent) => void) | null = null;
+
+export function _setMetricsSink(sink: ((event: LogEvent) => void) | null): void {
+  _metricsSink = sink;
 }
