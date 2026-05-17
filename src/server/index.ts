@@ -192,6 +192,7 @@ function warmingMetadata(seedManager: SeedManager, source: SeedSource) {
   return {
     warming: progress.status !== "complete",
     hint: WARMING_HINTS[source],
+    hints: { [source]: WARMING_HINTS[source] },
     progress,
   };
 }
@@ -228,7 +229,7 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
 
   const server = new McpServer({
     name: "rodocsmcp",
-    version: "1.0.0",
+    version: "2.0.0",
   });
 
   const fastFlagScraper = new FastFlagScraper(store, syncManager, sharedIndexer);
@@ -432,7 +433,9 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
       description:
         "BM25-searches known API names for the closest match to a query. " +
         "Use this when you have an approximate or misspelled name and need the exact spelling " +
-        "before calling get_api_reference. Also resolves common aliases (e.g. 'datastore').",
+        "before calling get_api_reference. Also resolves common aliases (e.g. 'datastore'). " +
+        "Returns the best match plus up to 4 runner-up candidates with confidence scores. " +
+        "Recommended first step in the lookup workflow: find_api_name → get_api_reference.",
       inputSchema: {
         query: z.string().min(1).describe("Partial or approximate API name to search for."),
       },
@@ -440,10 +443,21 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
     async ({ query }) => {
       scheduler.recordActivity();
       seedManager.prioritize("docs");
-      const results = await search(query, { types: ["api"], limit: 1 }, githubToken);
+      const results = await search(query, { types: ["api"], limit: 5 }, githubToken);
       const top = results[0];
+      const maxScore = top?.score ?? 1;
       const payload =
-        top !== undefined ? { found: true, match: top.name } : { found: false, match: null };
+        top !== undefined
+          ? {
+              found: true,
+              match: top.name,
+              confidence: Math.min(1, top.score / Math.max(maxScore, 1)),
+              candidates: results.slice(1).map((r) => ({
+                name: r.name,
+                score: r.score,
+              })),
+            }
+          : { found: false, match: null, confidence: 0, candidates: [] };
       return {
         content: [
           {
@@ -461,8 +475,8 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
       title: "Search Roblox Creator Guides",
       description:
         "BM25-searches the Roblox creator-docs repository for guides, tutorials and documentation pages " +
-        "matching a free-text query. Returns up to 10 results with path, title, description and category. " +
-        "Use this to discover relevant guides before fetching their full content with get_guide.",
+        "matching a free-text query. Returns results with path, title, description and category. " +
+        "Use this for tutorial/conceptual questions. For API reference, prefer find_api_name → get_api_reference.",
       inputSchema: {
         query: z
           .string()
@@ -470,12 +484,19 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
           .describe(
             'Free-text search query. E.g.: "tweening", "physics constraints", "data store"',
           ),
+        limit: z
+          .number()
+          .min(1)
+          .max(50)
+          .optional()
+          .default(10)
+          .describe("Maximum number of results. Default: 10."),
       },
     },
-    async ({ query }) => {
+    async ({ query, limit }) => {
       scheduler.recordActivity();
       seedManager.prioritize("guides");
-      const results = await searchGuides(query, 10, githubToken);
+      const results = await searchGuides(query, limit, githubToken);
       return {
         content: [
           {
@@ -492,8 +513,10 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
     {
       title: "Search Roblox Docs, Guides, FastFlags, and DevForum",
       description:
-        "Searches Roblox docs, guides, local FastFlags, and local curated DevForum records. " +
-        "Results are grouped by source. FastFlags and DevForum are read from the local store only.",
+        "Unified cross-source search across Roblox docs, guides, local FastFlags, and curated DevForum. " +
+        "Results are grouped by source. Use this for broad exploratory queries that may span multiple sources. " +
+        "For precise workflows, prefer: find_api_name → get_api_reference (API lookup), " +
+        "search_guides → get_guide (tutorials), roblox_fastflags (flag-specific), roblox_devforum (community solutions).",
       inputSchema: {
         query: z
           .string()
@@ -503,7 +526,9 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
           .enum(ROBLOX_SEARCH_SOURCES)
           .optional()
           .default("all")
-          .describe("Optional source filter. Defaults to all."),
+          .describe(
+            'Source filter: "all" (default), "docs", "guides", "fastflags", or "devforum".',
+          ),
         limit: z
           .number()
           .min(1)
@@ -566,10 +591,18 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
     {
       title: "Search Curated Roblox DevForum Records",
       description:
-        "Searches locally seeded curated DevForum technical records. Offline-only; does not call DevForum.",
+        "Searches locally seeded curated DevForum technical records for community solutions and patterns. " +
+        "Offline-only; does not call DevForum. Use this for implementation patterns, community workarounds, " +
+        "and real-world usage examples. For official docs, prefer get_api_reference or search_guides instead.",
       inputSchema: {
         query: z.string().min(1).describe("Technical query to search in local DevForum records."),
-        tags: z.array(z.string().min(1)).optional().describe("Optional required DevForum tags."),
+        tags: z
+          .array(z.string().min(1))
+          .optional()
+          .describe(
+            "Optional required DevForum tags to filter results. " +
+              'Common tags: "scripting", "building", "animation", "networking", "ui".',
+          ),
         requireAcceptedAnswer: z
           .boolean()
           .optional()
@@ -849,31 +882,38 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
 
   server.registerTool(
     "roblox_fastflags",
-
     {
       title: "Search Roblox FastFlags",
       description:
-        "Searches for Roblox FastFlags (FFlags) in the local store. " +
-        "Supports filtering by name, kind, behavior, and platform. " +
-        "Returns a list of flags with their values and metadata.",
+        "Searches for Roblox FastFlags (FFlags) in the local store (source: MaximumADHD). " +
+        "Supports filtering by name substring, kind, behavior, and platform. " +
+        "Use this for debugging, feature detection, or checking experimental features. " +
+        "For broader search across all sources, use roblox_search with source='fastflags'.",
       inputSchema: {
         query: z.string().optional().describe("Substring or exact name of the flag to search for."),
         kind: z
           .enum(["FFlag", "FInt", "FString", "FLog", "FBoolean", "Unknown"])
           .optional()
-          .describe("Filter by flag type."),
+          .describe("Filter by flag type: FFlag (bool), FInt, FString, FLog, FBoolean."),
         behavior: z
           .enum(["Fast", "Dynamic", "Synchronized", "Unknown"])
           .optional()
-          .describe("Filter by update behavior."),
-        platform: z.string().optional().describe("Filter by specific platform."),
+          .describe(
+            "Filter by update behavior: Fast (client-side), Dynamic (runtime), Synchronized.",
+          ),
+        platform: z
+          .string()
+          .optional()
+          .describe(
+            'Filter by platform. Common values: "Windows", "Mac", "iOS", "Android", "XBox", "Studio".',
+          ),
         limit: z
           .number()
           .min(1)
           .max(100)
           .optional()
           .default(50)
-          .describe("Maximum number of results to return."),
+          .describe("Maximum number of results to return. Default: 50."),
       },
     },
     async (args) => {

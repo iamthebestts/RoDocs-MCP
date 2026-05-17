@@ -347,31 +347,33 @@ function printHelp(): void {
       bold(c("cyan", "rodocsmcp")) + dim(" — Roblox Creator Hub API reference & MCP server"),
       "",
       bold("USAGE"),
-      `  ${c("green", "rodocsmcp")}                    Start MCP server ${dim("(stdio)")}`,
-      `  ${c("green", "rodocsmcp")} ${c("yellow", "--stdio")}             Start MCP server ${dim("(stdio, explicit)")}`,
-      `  ${c("green", "rodocsmcp")} ${c("yellow", "--daemon")}            Start local TCP daemon ${dim("(127.0.0.1:30030)")}`,
-      `  ${c("green", "rodocsmcp")} ${c("yellow", "--client")}            Bridge MCP stdio through local daemon`,
-      `  ${c("green", "rodocsmcp")} ${c("yellow", "<TopicName>")}         Print docs for a topic`,
-      `  ${c("green", "rodocsmcp")} ${c("yellow", "--list")}              List all API names`,
-      `  ${c("green", "rodocsmcp")} ${c("yellow", "--find <query>")}      Find closest API name`,
-      `  ${c("green", "rodocsmcp")} ${c("yellow", "--guide <path>")}      Fetch a guide by path`,
-      `  ${c("green", "rodocsmcp")} ${c("yellow", "--search-guide <q>")}  Search guides by keyword`,
-      `  ${c("green", "rodocsmcp")} ${c("yellow", "--github-token <t>")}  Authenticate GitHub requests`,
-      `  ${c("green", "rodocsmcp")} ${c("yellow", "--seed-fastflags")}    Seed FastFlags from MaximumADHD`,
-      `  ${c("green", "rodocsmcp")} ${c("yellow", "--seed-devforum")}     Seed DevForum curated technical content`,
-      `  ${c("green", "rodocsmcp")} ${c("yellow", "--help")} ${dim("| -h")}          Show this help`,
+      `  ${c("green", "rodocsmcp")}                          Start MCP server ${dim("(stdio)")}`,
+      `  ${c("green", "rodocsmcp")} ${c("yellow", "<TopicName>")}               Print docs for a topic`,
+      `  ${c("green", "rodocsmcp")} ${c("yellow", "<TopicName> --json")}         Print docs as JSON ${dim("(for agents)")}`,
+      `  ${c("green", "rodocsmcp")} ${c("yellow", "--list")}                    List all API names`,
+      `  ${c("green", "rodocsmcp")} ${c("yellow", "--find <query>")}            Find closest API name`,
+      `  ${c("green", "rodocsmcp")} ${c("yellow", "--guide <path>")}            Fetch a guide by path`,
+      `  ${c("green", "rodocsmcp")} ${c("yellow", "--search-guide <query>")}    Search guides by keyword`,
+      `  ${c("green", "rodocsmcp")} ${c("yellow", "--setup <provider>")}        Configure MCP in IDE/editor`,
+      `  ${c("green", "rodocsmcp")} ${c("yellow", "--github-token <token>")}    Authenticate GitHub requests`,
+      "",
+      `  ${dim("Maintenance:")}`,
+      `  ${c("green", "rodocsmcp")} ${c("yellow", "--seed-fastflags")}          Seed FastFlags from MaximumADHD`,
+      `  ${c("green", "rodocsmcp")} ${c("yellow", "--seed-devforum")}           Seed DevForum curated content`,
+      `  ${c("green", "rodocsmcp")} ${c("yellow", "--daemon")}                  Start local TCP daemon ${dim("(port 30030)")}`,
+      `  ${c("green", "rodocsmcp")} ${c("yellow", "--client")}                  Bridge MCP stdio through daemon`,
+      `  ${c("green", "rodocsmcp")} ${c("yellow", "--help")} ${dim("| -h")}                Show this help`,
 
       "",
       bold("EXAMPLES"),
       `  ${dim("$")} rodocsmcp Actor`,
-      `  ${dim("$")} rodocsmcp TweenService`,
-      `  ${dim("$")} rodocsmcp KeyCode`,
-      `  ${dim("$")} rodocsmcp --list`,
+      `  ${dim("$")} rodocsmcp TweenService --json`,
       `  ${dim("$")} rodocsmcp --find tweenserv`,
+      `  ${dim("$")} rodocsmcp --list`,
       `  ${dim("$")} rodocsmcp --search-guide "data store"`,
       `  ${dim("$")} rodocsmcp --guide scripting/data/data-stores.md`,
+      `  ${dim("$")} rodocsmcp --setup claude`,
       `  ${dim("$")} rodocsmcp --seed-fastflags`,
-      `  ${dim("$")} rodocsmcp --seed-devforum`,
 
       "",
     ].join("\n"),
@@ -422,17 +424,27 @@ async function runClientMode(githubToken?: string): Promise<void> {
   });
 }
 
-async function runTopicCli(topic: string, githubToken?: string): Promise<void> {
+async function runTopicCli(topic: string, githubToken?: string, jsonOutput = false): Promise<void> {
   process.stderr.write(`${dim(`Fetching "${topic}"...`)}\n`);
   try {
     const result = await scrapeTopic(topic, githubToken);
-    process.stdout.write(`${formatEntry(result.entry)}\n`);
+    if (jsonOutput) {
+      process.stdout.write(`${JSON.stringify(result.entry, null, 2)}\n`);
+    } else {
+      process.stdout.write(`${formatEntry(result.entry)}\n`);
+    }
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     const suggestion = await findClosestApiName(topic, githubToken).catch(() => null);
-    process.stderr.write(`${c("red", "✖")} ${message}\n`);
-    if (suggestion !== null) {
-      process.stderr.write(`${c("yellow", "?")} Did you mean: ${bold(c("cyan", suggestion))}?\n`);
+    if (jsonOutput) {
+      process.stdout.write(
+        `${JSON.stringify({ error: message, suggestion: suggestion ?? undefined }, null, 2)}\n`,
+      );
+    } else {
+      process.stderr.write(`${c("red", "✖")} ${message}\n`);
+      if (suggestion !== null) {
+        process.stderr.write(`${c("yellow", "?")} Did you mean: ${bold(c("cyan", suggestion))}?\n`);
+      }
     }
     process.exit(1);
   }
@@ -501,21 +513,6 @@ async function runGuideCli(path: string, githubToken?: string): Promise<void> {
   }
 }
 
-async function runDemoCli(): Promise<void> {
-  process.stderr.write(`${dim("Running demo...")}\n`);
-  try {
-    const store = new LmdbStore();
-    await store.open();
-    process.stdout.write(`${c("green", "✔")} Store is initialized and ready.\n`);
-    await store.close();
-  } catch (err: unknown) {
-    process.stderr.write(
-      `${c("red", "✖")} Failed to access store: ${err instanceof Error ? err.message : String(err)}\n`,
-    );
-    process.exit(1);
-  }
-}
-
 // ! Entry point
 
 export async function main(
@@ -530,11 +527,6 @@ export async function main(
   }
 
   const first = args[0];
-
-  if (first === "demo") {
-    await runDemoCli();
-    return;
-  }
 
   if (first === "--setup") {
     const provider = args[1];
@@ -648,7 +640,11 @@ export async function main(
   }
 
   if (first !== undefined) {
-    await runTopicCli(first, githubToken);
+    const jsonOutput = args.includes("--json");
+    const topic = jsonOutput && first === "--json" ? args[1] : first;
+    if (topic !== undefined) {
+      await runTopicCli(topic, githubToken, jsonOutput);
+    }
   }
 }
 

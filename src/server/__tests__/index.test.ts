@@ -251,7 +251,7 @@ describe("server", () => {
 
     expect(server.options).toMatchObject({
       name: "rodocsmcp",
-      version: "1.0.0",
+      version: "2.0.0",
     });
     expect([...server.tools.keys()]).toEqual([
       "get_api_reference",
@@ -421,7 +421,7 @@ describe("server", () => {
     await server.tools.get("get_guide")?.handler({ path: "tutorials/save-player-data.md" });
 
     expect(serverState.scrapeTopic).toHaveBeenCalledWith("Actor", "pat-123");
-    expect(serverState.search).toHaveBeenCalledWith("Act", { types: ["api"], limit: 1 }, "pat-123");
+    expect(serverState.search).toHaveBeenCalledWith("Act", { types: ["api"], limit: 5 }, "pat-123");
     expect(serverState.fetchGuide).toHaveBeenCalledWith("tutorials/save-player-data.md", "pat-123");
   });
 
