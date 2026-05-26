@@ -47,7 +47,7 @@ export interface IKeyValueStore {
 
 - `LmdbStore` gains `implements IKeyValueStore` — no logic changes.
 - `Indexer` constructor changes from `readonly _store: LmdbStore` to `readonly _store: IKeyValueStore`.
-- `Indexer.basePath` strip regex updated: `/store\.(lmdb|db)$/` → `""` — handles both backends.
+- O regex do `replace()` no `Indexer.basePath` muda de `/store\.lmdb$/` para `/store\.(lmdb|db)$/`, preservando o diretório de cache. Ou seja: `getPath()` retorna o path do arquivo (`store.lmdb` ou `store.db`); o `replace()` remove o nome do arquivo, deixando apenas o diretório.
 - `SyncStateManager` constructor types against `IKeyValueStore`.
 - `createStore()` return type changes to `Promise<IKeyValueStore>`.
 - `createSyncStateManager()` parameter type changes to `IKeyValueStore`.
@@ -120,10 +120,11 @@ After CI is green against `SqliteStore`:
 
 ### New module: `src/embedding/`
 
-**`model.ts`** — singleton loader for `Xenova/multilingual-e5-small`:
+**`model.ts`** — singleton loader para o modelo de embedding:
 - Exports `loadModel(): Promise<EmbeddingModel>` and `_resetModelForTesting()`.
 - Model downloaded once into the transformers cache on first call; subsequent calls reuse the singleton.
 - Loading is lazy — nothing runs until `embed()` is first called.
+- **Identificador do modelo:** usar `Xenova/multilingual-e5-small` (384 dimensões, 12 camadas). Verificar antes da implementação se o namespace `Xenova/` permanece válido no ecossistema atual do `@xenova/transformers` ou se foi migrado para outro namespace (ex.: `HuggingFaceH4/` ou similar). Esta é uma verificação prévia obrigatória antes de codificar o `model.ts`.
 
 **`embedder.ts`** — exports `embed(texts: string[]): Promise<Float32Array[]>`:
 - Batches inputs, calls the model, returns L2-normalized vectors.
@@ -142,6 +143,12 @@ After CI is green against `SqliteStore`:
     embedding FLOAT[384]
   )
   ```
+- **Carregamento do `sqlite-vec`:** usar o helper JS do pacote npm, não `db.loadExtension()` manual:
+  ```typescript
+  import { load } from "sqlite-vec";
+  load(db); // db é a instância better-sqlite3
+  ```
+  Isso elimina dependência de path de `.so`/`.dll` e simplifica a distribuição — o pacote `sqlite-vec` no npm já inclui os binários nativos necessários.
 
 ### New type: `EmbedDoc`
 
@@ -229,7 +236,7 @@ Internal flow:
    Assigns `vecRank` (1-based by distance).
 3. **RRF fusion** — calls `reciprocalRankFusion()`, returns final ranked list.
 
-**Fallback:** If the embedding model is not yet loaded (cold start), `hybridSearch` falls back silently to BM25-only. No error is surfaced to MCP tools. The response includes `searchMode: "hybrid" | "bm25"` for observability.
+**Fallback:** Qualquer falha transitória no caminho vetorial — modelo frio, download falhou, `sqlite-vec` indisponível, query embedding falhou — deve resultar em fallback silencioso para BM25 puro. Nenhum erro é exposto ao cliente MCP. O campo `searchMode: "hybrid" | "bm25"` é incluído na resposta para observabilidade, permitindo diagnóstico sem quebrar o contrato do tool.
 
 ### Integration with `robloxSearch`
 
@@ -253,8 +260,8 @@ When `true`, delegates to `hybridSearch`. No changes to Zod schemas or MCP tool 
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
-| `better-sqlite3` native bindings break on some platforms/Node versions | Medium | High | Pin to a tested version; add CI matrix for Node 20/22 on Win/Linux/Mac |
-| `sqlite-vec` extension load failure (missing `.so`/`.dll`) | Medium | Medium | Wrap in try/catch; if `sqlite-vec` fails to load, disable hybrid search and log a warning |
+| `better-sqlite3` native bindings break on some platforms/Node versions | Medium | High | Pin `better-sqlite3` a versões testadas; matriz de CI obrigatória para **Node 20 e 22** (não "latest") em Win/Linux/Mac. Node 25 tem issue de build ativo — não incluir na matrix. |
+| `sqlite-vec` extension load failure | Low | Medium | Usar `import { load } from "sqlite-vec"; load(db)` — pacote npm já inclui binários. Envolver em try/catch; se falhar, desabilitar hybrid search e logar warning. |
 | Embedding model download blocked at startup in offline/firewall environments | High | Medium | Model loading is lazy; if download fails, fall back to BM25 silently. Document `TRANSFORMERS_CACHE` env var for offline pre-download |
 | `@xenova/transformers` WASM binary is large (~50MB) and slow on first run | High | Low | Only loaded if `buildEmbeddings` is configured; seed pipeline already runs in background |
 | Cache loss on first SQLite run (re-seed required) | Certain | Low | Document in release notes; sources re-seed automatically in background |
@@ -275,14 +282,26 @@ Each phase is a standalone PR. Phases 3 and 4 depend on Phase 2 (SQLite must be 
 
 ---
 
+## Coverage Requirements
+
+Toda nova linha de código implementada nas Fases 1–4 deve atingir **cobertura mínima de 70% nas linhas novas** (non-branch coverage, não percentual total do projeto). Isso aplica especialmente a:
+
+- `src/store/sqlite-store.ts`
+- `src/embedding/` (todos os arquivos)
+- `src/search/hybrid.ts`
+
+O objetivo é garantir que lógica crítica — fallback silencioso, carregamento de modelo, fusão RRF, tratamento de erro — seja testada adequadamente. Adicionar `src/embedding/` ao escopo de cobertura do Vitest (`coverage.include` em `vitest.config.ts`).
+
+---
+
 ## Pending Confirmations Before Implementation
 
-1. **`better-sqlite3` vs `bun:sqlite`** — the project allows `bun run <script>` as a shortcut. Should `SqliteStore` use the Node.js `better-sqlite3` package or the Bun-native `bun:sqlite` (zero-install, but ties the runtime to Bun)? Recommend `better-sqlite3` for Node.js compatibility.
+1. **`better-sqlite3` vs `bun:sqlite`** — o projeto permite `bun run <script>` como atalho. `SqliteStore` deve usar `better-sqlite3` (Node.js, compatibilidade total) ou `bun:sqlite` (zero-install, mas acopla ao runtime Bun)? **Recomendação: `better-sqlite3`** para manter compatibilidade Node.js. *(Confirmar antes da Fase 2.)*
 
-2. **`sqlite-vec` distribution** — `sqlite-vec` requires loading a native extension via `db.loadExtension()`. Confirm the extension is bundled as an npm package (`sqlite-vec` on npm) or must be installed separately. This affects the `package.json` dependency and the `tsup` build config.
+2. ~~**`sqlite-vec` distribution**~~ — **Resolvido:** usar `import { load } from "sqlite-vec"; load(db)`. O pacote npm `sqlite-vec` já inclui os binários. Adicionar `sqlite-vec` ao `package.json`.
 
-3. **Embedding model offline policy** — confirm whether `TRANSFORMERS_CACHE` pre-download should be documented in the README or enforced as a required setup step for air-gapped environments.
+3. **Embedding model offline policy** — documentar no README o uso de `TRANSFORMERS_CACHE` para pré-download em ambientes air-gapped, ou tornar passo obrigatório de setup? *(Confirmar antes da Fase 3.)*
 
-4. **`hybrid: true` rollout gate** — confirm whether `hybrid` defaults to `false` (feature flag) until manually enabled, or whether it becomes the default once Phase 4 lands.
+4. **`hybrid: true` rollout gate** — `hybrid` permanece `false` por padrão como feature flag até ser manualmente habilitado, ou torna-se padrão quando a Fase 4 aterrissar? *(Confirmar antes da Fase 4.)*
 
-5. **Coverage scope** — `src/embedding/` is not currently in the Vitest coverage scope (`src/search/`, `src/scraper/`, `src/devforum/`, `src/fastflags/`). Confirm whether to add it or keep the current scope unchanged.
+5. ~~**Coverage scope**~~ — **Resolvido:** adicionar `src/embedding/` ao `coverage.include` em `vitest.config.ts`. Ver seção *Coverage Requirements* acima.
