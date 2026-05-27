@@ -42,7 +42,7 @@ export interface SyncState {
  * Uses LMDB store for persistence
  */
 export class SyncStateManager {
-  constructor(private lmdbStore: import("./lmdb-store").LmdbStore) {}
+  constructor(private lmdbStore: import("./store-interface.js").IKeyValueStore) {}
 
   /**
    * Get sync state for a specific source
