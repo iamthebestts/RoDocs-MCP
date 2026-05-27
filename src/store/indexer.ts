@@ -1,9 +1,11 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+
 import { decode, encode } from "@msgpack/msgpack";
 import type { BM25, BM25Doc } from "../search/bm25.js";
 import { observe, startTimer } from "../utils/logger.js";
-import type { LmdbStore, SyncStateManager } from "./index.js";
+import type { IKeyValueStore } from "./store-interface.js";
+import type { SyncStateManager } from "./sync-state.js";
 
 interface SerializedIndex {
   termFreqs: [string, [string, number][]][];
@@ -21,10 +23,10 @@ export class Indexer {
   private readonly clearCallbacks = new Map<string, () => void>();
 
   constructor(
-    readonly _store: LmdbStore,
+    readonly _store: IKeyValueStore,
     readonly _syncManager: SyncStateManager,
   ) {
-    this.basePath = join(_store.getPath().replace(/store\.lmdb$/, ""), "");
+    this.basePath = dirname(_store.getPath());
   }
 
   /**

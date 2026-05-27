@@ -86,6 +86,18 @@ describe("Indexer", () => {
     expect(called).toBe(false);
   });
 
+  it("derives basePath from store.db path", () => {
+    const dir = join(tmpdir(), "rodocsmcp");
+    const mockStore = {
+      getPath: () => join(dir, "store.db"),
+    } as unknown as import("../index.js").LmdbStore;
+    const mockSync = {} as import("../sync-state.js").SyncStateManager;
+
+    const indexer = new Indexer(mockStore, mockSync);
+
+    expect((indexer as unknown as { basePath: string }).basePath).toBe(dir);
+  });
+
   describe("observability", () => {
     it("emits indexer.clear with the correct source when clear() is called", async () => {
       await indexer.clear("api");
