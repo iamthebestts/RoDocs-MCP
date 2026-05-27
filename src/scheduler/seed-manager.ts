@@ -38,6 +38,8 @@ export interface SeedSourceRunner {
   batchSize: number;
   runBatch: (context: SeedBatchContext) => Promise<SeedBatchResult>;
   rebuildIndex?: () => Promise<void>;
+  /** Called after rebuildIndex; errors are isolated and non-fatal */
+  buildEmbeddings?: () => Promise<void>;
 }
 
 export interface SeedManagerOptions {
@@ -250,6 +252,14 @@ export class SeedManager {
     if (updated.status === "complete") {
       if (updated.needsRebuild) {
         await runner.rebuildIndex?.();
+
+        if (runner.buildEmbeddings) {
+          runner.buildEmbeddings().catch((err: unknown) => {
+            this.logger.error(
+              `[Seed] ${source}: buildEmbeddings failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
+        }
       }
       this.logger.error(`[Seed] ${source}: complete (${updated.seededItems} entries)`);
     }

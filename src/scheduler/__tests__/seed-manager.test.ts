@@ -355,4 +355,61 @@ describe("SeedManager", () => {
 
     expect(rebuildIndex).not.toHaveBeenCalled();
   });
+
+  it("calls buildEmbeddings after rebuildIndex when source completes with needsRebuild", async () => {
+    const rebuildIndex = vi.fn(async () => {});
+    const buildEmbeddings = vi.fn(async () => {});
+    const manager = new SeedManager({
+      syncManager,
+      idleDetector: createIdleDetector(true),
+      runners: [
+        {
+          source: "docs",
+          estimatedTotal: 50,
+          batchSize: DEFAULT_SEED_BATCH_SIZES.docs,
+          runBatch: async () => ({ processed: 50, done: true, needsRebuild: true }),
+          rebuildIndex,
+          buildEmbeddings,
+        },
+      ],
+      logger,
+      yieldFn,
+    });
+
+    await manager.processNextBatch();
+    // buildEmbeddings is fire-and-forget; flush microtasks
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(rebuildIndex).toHaveBeenCalledOnce();
+    expect(buildEmbeddings).toHaveBeenCalledOnce();
+    expect(rebuildIndex.mock.invocationCallOrder[0]).toBeLessThan(
+      buildEmbeddings.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("buildEmbeddings error does not affect seed completion status", async () => {
+    const buildEmbeddings = vi.fn(async () => {
+      throw new Error("model load failed");
+    });
+    const manager = new SeedManager({
+      syncManager,
+      idleDetector: createIdleDetector(true),
+      runners: [
+        {
+          source: "docs",
+          estimatedTotal: 50,
+          batchSize: DEFAULT_SEED_BATCH_SIZES.docs,
+          runBatch: async () => ({ processed: 50, done: true, needsRebuild: true }),
+          buildEmbeddings,
+        },
+      ],
+      logger,
+      yieldFn,
+    });
+
+    await manager.processNextBatch();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(manager.getProgress("docs").status).toBe("complete");
+  });
 });
