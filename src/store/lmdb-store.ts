@@ -2,6 +2,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { type Database, open } from "lmdb";
+import type { IKeyValueStore } from "./store-interface.js";
 
 const DEFAULT_CACHE_DIR = join(homedir(), ".cache", "rodocsmcp");
 const DEFAULT_STORE_PATH = join(DEFAULT_CACHE_DIR, "store.lmdb");
@@ -21,7 +22,7 @@ export interface LmdbStoreOptions {
  * LMDB wrapper for RoDocsMCP caching
  * Provides type-safe operations over LMDB with proper error handling
  */
-export class LmdbStore {
+export class LmdbStore implements IKeyValueStore {
   private db: Database | null = null;
   private readonly path: string;
 
