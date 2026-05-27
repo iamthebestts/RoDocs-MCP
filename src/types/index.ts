@@ -148,3 +148,9 @@ export interface SearchResult {
   readonly description?: string;
   readonly isDuplicate?: boolean;
 }
+
+export interface EmbedDoc {
+  id: string;
+  source: string;
+  text: string;
+}
