@@ -3,7 +3,12 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import { initIndexer } from "../search/index.js";
 import { createServer, type ServerInstance } from "../server/index.js";
-import { createSyncStateManager, LmdbStore, type SyncStateManager } from "../store/index.js";
+import {
+  createSyncStateManager,
+  type IKeyValueStore,
+  LmdbStore,
+  type SyncStateManager,
+} from "../store/index.js";
 import {
   DAEMON_HOST,
   DAEMON_PORT,
@@ -19,12 +24,12 @@ export interface DaemonServerOptions {
   port?: number;
   githubToken?: string;
   idleMs?: number;
-  createStore?: () => LmdbStore;
+  createStore?: () => IKeyValueStore;
   createMcpServer?: (context: DaemonServerContext) => ServerInstance;
 }
 
 export interface DaemonServerContext {
-  store: LmdbStore;
+  store: IKeyValueStore;
   syncManager: SyncStateManager;
   githubToken?: string | undefined;
 }
@@ -216,7 +221,7 @@ export async function startDaemonServer(
   }
 }
 
-function serializeStoreWrites(store: LmdbStore): void {
+function serializeStoreWrites(store: IKeyValueStore): void {
   let tail = Promise.resolve();
   const enqueue = <T>(operation: () => Promise<T>): Promise<T> => {
     const run = tail.then(operation, operation);

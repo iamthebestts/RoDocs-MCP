@@ -1,6 +1,6 @@
 import type { BM25Doc } from "../search/bm25.js";
 import { BM25 } from "../search/bm25.js";
-import type { LmdbStore } from "../store/index.js";
+import type { IKeyValueStore } from "../store/index.js";
 import type { Indexer } from "../store/indexer.js";
 import { observe, startTimer } from "../utils/logger.js";
 import type { FastFlag } from "./parser.js";
@@ -34,7 +34,7 @@ export function _resetFastFlagsIndexForTesting(): void {
  */
 export class FastFlagSearch {
   constructor(
-    private readonly store: LmdbStore,
+    private readonly store: IKeyValueStore,
     indexer?: Indexer,
   ) {
     if (indexer) {

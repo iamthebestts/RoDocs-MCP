@@ -1,7 +1,7 @@
 import { fetchIndex } from "../scraper/fetch.js";
 import type { GuideMetadata } from "../scraper/guides.js";
 import { fetchGuideIndex } from "../scraper/guides.js";
-import type { LmdbStore, SyncStateManager } from "../store/index.js";
+import type { IKeyValueStore, SyncStateManager } from "../store/index.js";
 import { Indexer } from "../store/indexer.js";
 import type { BM25Doc, SearchOptions, SearchResult } from "../types/index.js";
 import { observe, startTimer } from "../utils/logger.js";
@@ -47,7 +47,7 @@ function apiPathPrefix(category: ApiSearchKind): string {
  * Accepts an existing Indexer instance so the server can share one across all components.
  */
 export function initIndexer(
-  store: LmdbStore,
+  store: IKeyValueStore,
   syncManager: SyncStateManager,
   existingIndexer?: Indexer,
 ): void {

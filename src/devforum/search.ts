@@ -1,6 +1,6 @@
 import type { BM25Doc } from "../search/bm25.js";
 import { BM25 } from "../search/bm25.js";
-import type { LmdbStore } from "../store/index.js";
+import type { IKeyValueStore } from "../store/index.js";
 import type { Indexer } from "../store/indexer.js";
 import { observe, startTimer } from "../utils/logger.js";
 import type { DevForumRecord } from "./types.js";
@@ -152,7 +152,7 @@ function project(record: DevForumRecord): DevForumSearchResult {
   };
 }
 
-async function buildDevForumIndex(store: LmdbStore): Promise<void> {
+async function buildDevForumIndex(store: IKeyValueStore): Promise<void> {
   const elapsed = startTimer();
   const keys = (await store.keys()).filter((key) => key.startsWith("devforum:"));
   const records = (await Promise.all(keys.map((key) => store.get<DevForumRecord>(key)))).filter(
@@ -176,7 +176,7 @@ async function buildDevForumIndex(store: LmdbStore): Promise<void> {
   observe({ event: "search.rebuild", source: "devforum", durationMs: elapsed() });
 }
 
-async function ensureDevForumIndex(store: LmdbStore): Promise<boolean> {
+async function ensureDevForumIndex(store: IKeyValueStore): Promise<boolean> {
   if (_indexer === null) return false;
   if (_buildPromise !== null) {
     await _buildPromise;
@@ -203,7 +203,7 @@ function applyFilters(
 }
 
 export async function searchDevForumStore(
-  store: LmdbStore,
+  store: IKeyValueStore,
   options: DevForumSearchOptions,
 ): Promise<DevForumSearchResponse> {
   const elapsed = startTimer();

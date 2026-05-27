@@ -14,6 +14,7 @@ import { initIndexer, search, searchGuides, warmUp } from "../search/index.js";
 import { ROBLOX_SEARCH_SOURCES, robloxSearch } from "../search/roblox-search.js";
 import {
   createSyncStateManager,
+  type IKeyValueStore,
   Indexer,
   LmdbStore,
   type SyncStateManager,
@@ -160,7 +161,7 @@ export interface CreateServerOptions {
   githubToken?: string;
   schedulerOptions?: { jobsOptional?: boolean };
   autoStartScheduler?: boolean;
-  store?: LmdbStore;
+  store?: IKeyValueStore;
   syncManager?: SyncStateManager;
   initializeStore?: boolean;
 }

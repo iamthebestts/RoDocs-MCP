@@ -1,4 +1,4 @@
-import type { Indexer, LmdbStore, SyncStateManager } from "../store/index.js";
+import type { IKeyValueStore, Indexer, SyncStateManager } from "../store/index.js";
 import { logger } from "../utils/logger.js";
 import { Semaphore } from "../utils/semaphore.js";
 import { DevForumFetcher } from "./fetcher.js";
@@ -127,7 +127,7 @@ export class DevForumPipeline {
   private discoverySemaphore: Semaphore;
 
   constructor(
-    private readonly store: LmdbStore,
+    private readonly store: IKeyValueStore,
     private readonly syncManager: SyncStateManager,
     private readonly indexer: Indexer,
   ) {

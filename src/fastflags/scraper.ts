@@ -1,5 +1,5 @@
 import axios from "axios";
-import type { LmdbStore, SyncStateManager } from "../store/index.js";
+import type { IKeyValueStore, SyncStateManager } from "../store/index.js";
 import type { Indexer } from "../store/indexer.js";
 import { buildGithubHeaders } from "../utils/github-token.js";
 import { logger } from "../utils/logger.js";
@@ -20,7 +20,7 @@ type GitHubContentItem = {
  */
 export class FastFlagScraper {
   constructor(
-    private readonly store: LmdbStore,
+    private readonly store: IKeyValueStore,
     private readonly syncManager: SyncStateManager,
     private readonly indexer: Indexer,
   ) {}

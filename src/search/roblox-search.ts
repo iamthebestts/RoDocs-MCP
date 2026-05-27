@@ -2,7 +2,7 @@ import { getCachedDevForumRecords } from "../devforum/search.js";
 import type { DevForumRecord } from "../devforum/types.js";
 import type { FastFlag } from "../fastflags/parser.js";
 import { FastFlagSearch } from "../fastflags/search.js";
-import type { LmdbStore } from "../store/index.js";
+import type { IKeyValueStore } from "../store/index.js";
 import type { BM25Doc, SearchResult } from "../types/index.js";
 import { BM25 } from "./bm25.js";
 import { markDuplicates } from "./dedup.js";
@@ -109,7 +109,7 @@ function ageDays(record: DevForumRecord): number {
   return Math.max(0, (Date.now() - record.lastSyncAt) / 86_400_000);
 }
 
-async function fetchDevForumRecords(store: LmdbStore): Promise<readonly DevForumRecord[]> {
+async function fetchDevForumRecords(store: IKeyValueStore): Promise<readonly DevForumRecord[]> {
   // Use the singleton cache when the DevForum index has been pre-warmed,
   // avoiding a full LMDB key-scan + record fetch on every search call.
   const cached = getCachedDevForumRecords();
@@ -123,7 +123,7 @@ async function fetchDevForumRecords(store: LmdbStore): Promise<readonly DevForum
 }
 
 async function searchDevForum(
-  store: LmdbStore,
+  store: IKeyValueStore,
   query: string,
   limit: number,
 ): Promise<readonly DevForumSearchResult[]> {
@@ -171,7 +171,7 @@ async function searchDevForum(
 }
 
 export async function robloxSearch(
-  store: LmdbStore,
+  store: IKeyValueStore,
   options: RobloxSearchOptions,
 ): Promise<RobloxSearchResult> {
   const source = options.source ?? "all";
