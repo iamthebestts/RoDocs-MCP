@@ -2,17 +2,17 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { LmdbStore } from "../lmdb-store.js";
+import { SqliteStore } from "../sqlite-store.js";
 import { SyncStateManager } from "../sync-state.js";
 
 describe("SyncStateManager", () => {
-  let store: LmdbStore;
+  let store: SqliteStore;
   let syncManager: SyncStateManager;
   let tempDir: string;
 
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), "rodocsmcp-sync-test-"));
-    store = new LmdbStore({
+    store = new SqliteStore({
       cacheDir: tempDir,
     });
     await store.open();

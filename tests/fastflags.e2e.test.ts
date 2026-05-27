@@ -5,7 +5,7 @@ import axios from "axios";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { FastFlagScraper } from "../src/fastflags/scraper.js";
 import { FastFlagSearch } from "../src/fastflags/search.js";
-import { createSyncStateManager, LmdbStore } from "../src/store/index.js";
+import { createSyncStateManager, SqliteStore } from "../src/store/index.js";
 import { Indexer } from "../src/store/indexer.js";
 
 const e2e = process.env.E2E === "true" ? describe : describe.skip;
@@ -13,7 +13,7 @@ const e2e = process.env.E2E === "true" ? describe : describe.skip;
 vi.mock("axios");
 
 e2e("FastFlags E2E", () => {
-  let store: LmdbStore;
+  let store: SqliteStore;
   let scraper: FastFlagScraper;
   let ffSearch: FastFlagSearch;
   let tempDir: string;
@@ -27,7 +27,7 @@ e2e("FastFlags E2E", () => {
 
   beforeAll(async () => {
     tempDir = await mkdtemp(join(tmpdir(), "rodocs-ff-e2e-"));
-    store = new LmdbStore({ cacheDir: tempDir });
+    store = new SqliteStore({ cacheDir: tempDir });
     await store.open();
     const syncManager = createSyncStateManager(store);
     const indexer = new Indexer(store, syncManager);

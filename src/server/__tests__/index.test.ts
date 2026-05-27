@@ -128,7 +128,7 @@ vi.mock("../../devforum/search.js", () => ({
 }));
 
 vi.mock("../../store/index.js", () => {
-  class FakeLmdbStore {
+  class FakeSqliteStore {
     open = vi.fn(async () => {});
     close = vi.fn();
     keys = vi.fn(async () => []);
@@ -154,7 +154,7 @@ vi.mock("../../store/index.js", () => {
   }
 
   return {
-    LmdbStore: FakeLmdbStore,
+    SqliteStore: FakeSqliteStore,
     Indexer: FakeIndexer,
     createSyncStateManager,
   };

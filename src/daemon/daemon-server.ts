@@ -6,7 +6,7 @@ import { createServer, type ServerInstance } from "../server/index.js";
 import {
   createSyncStateManager,
   type IKeyValueStore,
-  LmdbStore,
+  SqliteStore,
   type SyncStateManager,
 } from "../store/index.js";
 import {
@@ -105,7 +105,7 @@ export async function startDaemonServer(
 ): Promise<RunningDaemonServer> {
   const host = options.host ?? DAEMON_HOST;
   const port = options.port ?? DAEMON_PORT;
-  const store = options.createStore?.() ?? new LmdbStore();
+  const store = options.createStore?.() ?? new SqliteStore();
   let opened = false;
   let tcpServer: net.Server | null = null;
   const serverInstances = new Set<ServerInstance>();

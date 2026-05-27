@@ -16,7 +16,7 @@ import type {
 import { fetchGuide, searchGuides } from "../scraper/guides.js";
 import { findClosestApiName, scrapeIndex, scrapeTopic } from "../scraper/index.js";
 import { createServer } from "../server/index.js";
-import { createSyncStateManager, LmdbStore } from "../store/index.js";
+import { createSyncStateManager, SqliteStore } from "../store/index.js";
 import { Indexer } from "../store/indexer.js";
 import { parseGithubTokenArgs } from "../utils/github-token.js";
 import { _setMetricsSink } from "../utils/logger.js";
@@ -605,7 +605,7 @@ export async function main(
   if (first === "--seed-fastflags") {
     process.stderr.write(`${dim("Seeding FastFlags...")}\n`);
     try {
-      const store = new LmdbStore();
+      const store = new SqliteStore();
       await store.open();
       const syncManager = createSyncStateManager(store);
       const indexer = new Indexer(store, syncManager);
@@ -629,7 +629,7 @@ export async function main(
   if (first === "--seed-devforum") {
     process.stderr.write(`${dim("Seeding DevForum...")}\n`);
     try {
-      const store = new LmdbStore();
+      const store = new SqliteStore();
       await store.open();
       const syncManager = createSyncStateManager(store);
       const indexer = new Indexer(store, syncManager);

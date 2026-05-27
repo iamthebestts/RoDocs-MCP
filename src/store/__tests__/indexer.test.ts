@@ -4,20 +4,20 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { BM25 } from "../../search/bm25.js";
 import { _setLogEventSinkForTesting, type LogEvent } from "../../utils/logger.js";
-import { LmdbStore, SyncStateManager } from "../index.js";
+import { SqliteStore, SyncStateManager } from "../index.js";
 import { Indexer } from "../indexer.js";
 
 describe("Indexer", () => {
   let indexer: Indexer;
   let bm25: BM25;
   let tempDir: string;
-  let store: LmdbStore;
+  let store: SqliteStore;
   let syncManager: SyncStateManager;
   let captured: LogEvent[];
 
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), "rodocs-indexer-test-"));
-    store = new LmdbStore({ cacheDir: tempDir });
+    store = new SqliteStore({ cacheDir: tempDir });
     await store.open();
     syncManager = new SyncStateManager(store);
     indexer = new Indexer(store, syncManager);
@@ -90,7 +90,7 @@ describe("Indexer", () => {
     const dir = join(tmpdir(), "rodocsmcp");
     const mockStore = {
       getPath: () => join(dir, "store.db"),
-    } as unknown as import("../index.js").LmdbStore;
+    } as unknown as import("../index.js").SqliteStore;
     const mockSync = {} as import("../sync-state.js").SyncStateManager;
 
     const indexer = new Indexer(mockStore, mockSync);

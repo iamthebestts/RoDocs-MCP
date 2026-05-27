@@ -30,9 +30,7 @@ export class SqliteStore implements IKeyValueStore {
   async open(): Promise<void> {
     try {
       this.db = new Database(this.path);
-      this.db.exec(
-        `CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
-      );
+      this.db.exec(`CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
     } catch (error) {
       throw new Error(
         `Failed to open SQLite store at ${this.path}: ${error instanceof Error ? error.message : String(error)}`,
@@ -42,7 +40,9 @@ export class SqliteStore implements IKeyValueStore {
 
   async get<T = unknown>(key: string): Promise<T | null> {
     const db = this.ensureOpen();
-    const row = db.prepare<[string], { value: string }>("SELECT value FROM kv WHERE key = ?").get(key);
+    const row = db
+      .prepare<[string], { value: string }>("SELECT value FROM kv WHERE key = ?")
+      .get(key);
     if (row === undefined) return null;
     return JSON.parse(row.value) as T;
   }

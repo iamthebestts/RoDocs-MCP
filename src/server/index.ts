@@ -16,7 +16,7 @@ import {
   createSyncStateManager,
   type IKeyValueStore,
   Indexer,
-  LmdbStore,
+  SqliteStore,
   type SyncStateManager,
 } from "../store/index.js";
 import { parseGithubTokenArgs, resolveGithubToken } from "../utils/github-token.js";
@@ -209,10 +209,9 @@ function resolveServerGithubToken(options: CreateServerOptions): string | undefi
 export function createServer(options: CreateServerOptions = {}): ServerInstance {
   const githubToken = resolveServerGithubToken(options);
 
-  // Initialize LMDB Store for index persistence
-  const store = options.store ?? new LmdbStore();
+  const store = options.store ?? new SqliteStore();
   if (options.initializeStore !== false) {
-    store.open().catch((err) => logger.error(`[Server] Store open failed: ${err}`));
+    store.open().catch((err: unknown) => logger.error(`[Server] Store open failed: ${err}`));
   }
   const syncManager = options.syncManager ?? createSyncStateManager(store);
 

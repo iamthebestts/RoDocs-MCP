@@ -5,7 +5,7 @@ export interface IKeyValueStore {
   keys(): Promise<string[]>;
   clear(): Promise<void>;
   open(): Promise<void>;
-  close(): Promise<void | unknown>;
+  close(): Promise<undefined | unknown>;
   isOpen(): boolean;
   /**
    * Returns the full path to the backing store file (e.g. store.lmdb or store.db).

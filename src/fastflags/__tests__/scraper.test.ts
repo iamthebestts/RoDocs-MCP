@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import axios from "axios";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createSyncStateManager, LmdbStore, type SyncStateManager } from "../../store/index.js";
+import { createSyncStateManager, SqliteStore, type SyncStateManager } from "../../store/index.js";
 import { Indexer } from "../../store/indexer.js";
 import { enrichFastFlag } from "../enricher.js";
 import { normalizeFastFlag } from "../parser.js";
@@ -12,14 +12,14 @@ import { FastFlagScraper } from "../scraper.js";
 vi.mock("axios");
 
 describe("FastFlags Module", () => {
-  let store: LmdbStore;
+  let store: SqliteStore;
   let syncManager: SyncStateManager;
   let scraper: FastFlagScraper;
   let tempDir: string;
 
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), "rodocs-ff-test-"));
-    store = new LmdbStore({ cacheDir: tempDir });
+    store = new SqliteStore({ cacheDir: tempDir });
     await store.open();
     syncManager = createSyncStateManager(store);
     const indexer = new Indexer(store, syncManager);

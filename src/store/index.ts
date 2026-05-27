@@ -3,30 +3,19 @@
  */
 
 import { Indexer } from "./indexer.js";
-import { LmdbStore, type LmdbStoreOptions } from "./lmdb-store.js";
 import { SqliteStore, type SqliteStoreOptions } from "./sqlite-store.js";
 import type { IKeyValueStore } from "./store-interface.js";
 import { SyncStateManager } from "./sync-state.js";
 
 export type { SyncState } from "./sync-state.js";
-export type { IKeyValueStore, LmdbStoreOptions, SqliteStoreOptions };
-export { Indexer, LmdbStore, SqliteStore, SyncStateManager };
-
-export type StoreBackend = "sqlite" | "lmdb";
-
-export interface StoreOptions extends SqliteStoreOptions {
-  /** Which backend to use. Default: 'sqlite'. Use 'lmdb' during validation only. */
-  backend?: StoreBackend;
-}
+export type { IKeyValueStore, SqliteStoreOptions };
+export { Indexer, SqliteStore, SyncStateManager };
 
 /**
- * Factory function to create a store.
- * Defaults to SqliteStore. Pass backend: 'lmdb' to use LmdbStore during migration validation.
+ * Factory function to create a SQLite-backed store.
  */
-export function createStore(options?: StoreOptions): Promise<IKeyValueStore> {
-  const backend = options?.backend ?? "sqlite";
-  const store: IKeyValueStore =
-    backend === "lmdb" ? new LmdbStore(options) : new SqliteStore(options);
+export function createStore(options?: SqliteStoreOptions): Promise<IKeyValueStore> {
+  const store = new SqliteStore(options);
   return store.open().then(() => store);
 }
 
