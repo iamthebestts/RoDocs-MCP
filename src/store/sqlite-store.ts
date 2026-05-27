@@ -2,6 +2,8 @@ import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
+import { load as loadSqliteVec } from "sqlite-vec";
+import { logger } from "../utils/logger.js";
 import type { IKeyValueStore } from "./store-interface.js";
 
 const DEFAULT_CACHE_DIR = join(homedir(), ".cache", "rodocsmcp");
@@ -30,7 +32,28 @@ export class SqliteStore implements IKeyValueStore {
   async open(): Promise<void> {
     try {
       this.db = new Database(this.path);
+
+      try {
+        loadSqliteVec(this.db);
+      } catch (vecErr) {
+        logger.warn(
+          `[SqliteStore] sqlite-vec failed to load; hybrid search disabled: ${vecErr instanceof Error ? vecErr.message : String(vecErr)}`,
+        );
+      }
+
       this.db.exec(`CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+
+      try {
+        this.db.exec(`
+          CREATE VIRTUAL TABLE IF NOT EXISTS vec_items USING vec0(
+            id TEXT PRIMARY KEY,
+            source TEXT,
+            embedding FLOAT[384]
+          )
+        `);
+      } catch {
+        // vec0 unavailable if sqlite-vec failed to load — safe to ignore
+      }
     } catch (error) {
       throw new Error(
         `Failed to open SQLite store at ${this.path}: ${error instanceof Error ? error.message : String(error)}`,

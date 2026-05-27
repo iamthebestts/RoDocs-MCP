@@ -94,4 +94,14 @@ describe("SqliteStore", () => {
       await rm(envDir, { recursive: true, force: true });
     }
   });
+
+  it("creates vec_items virtual table on open()", async () => {
+    const db = (store as unknown as { db: import("better-sqlite3").Database }).db;
+    const row = db
+      .prepare<[], { name: string }>(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name='vec_items'`,
+      )
+      .get();
+    expect(row?.name).toBe("vec_items");
+  });
 });
