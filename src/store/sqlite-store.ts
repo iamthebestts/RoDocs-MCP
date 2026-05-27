@@ -109,6 +109,13 @@ export class SqliteStore implements IKeyValueStore {
     return this.path;
   }
 
+  getDb(): Database.Database {
+    if (!this.db) {
+      throw new Error("SQLite store is not open. Call open() first.");
+    }
+    return this.db;
+  }
+
   private ensureOpen(): Database.Database {
     if (!this.db) {
       throw new Error("SQLite store is not open. Call open() first.");
