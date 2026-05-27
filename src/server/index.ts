@@ -3,6 +3,7 @@ import { z } from "zod";
 import { setupRateLimiter } from "../devforum/http.js";
 import { DevForumPipeline } from "../devforum/pipeline.js";
 import { initDevForumSearch, searchDevForumStore } from "../devforum/search.js";
+import { EmbeddingIndexer } from "../embedding/embedding-indexer.js";
 import { FastFlagScraper } from "../fastflags/scraper.js";
 import { FastFlagSearch } from "../fastflags/search.js";
 import { Scheduler } from "../scheduler/index.js";
@@ -222,6 +223,16 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
     initIndexer(store, syncManager, sharedIndexer);
     initDevForumSearch(sharedIndexer);
   }
+
+  let embeddingIndexer: EmbeddingIndexer | null = null;
+  if (store instanceof SqliteStore) {
+    try {
+      embeddingIndexer = new EmbeddingIndexer(store, store.getDb());
+    } catch {
+      logger.warn("[Server] EmbeddingIndexer could not be initialized; hybrid search disabled");
+    }
+  }
+
   const ffSearch = new FastFlagSearch(store, sharedIndexer);
 
   const scheduler = new Scheduler(options.schedulerOptions);
@@ -260,22 +271,60 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
         },
       },
       {
-        source: "fastflags",
+        source: "fastflags" as const,
         estimatedTotal: 12,
         batchSize: 3,
         runBatch: async () => {
           await fastFlagScraper.seed(githubToken);
           return { processed: 3, done: true, needsRebuild: true, logDetail: "3 targets" };
         },
+        ...(embeddingIndexer
+          ? {
+              buildEmbeddings: async () => {
+                const keys = await store.keys();
+                const flagKeys = keys.filter((k) => k.startsWith("fastflags:"));
+                const docs = await Promise.all(
+                  flagKeys.map(async (k) => {
+                    const record = await store.get<{ name: string; description?: string }>(k);
+                    return {
+                      id: k,
+                      source: "fastflags",
+                      text: record ? `${record.name} ${record.description ?? ""}`.trim() : k,
+                    };
+                  }),
+                );
+                await embeddingIndexer.indexSource("fastflags", docs);
+              },
+            }
+          : {}),
       },
       {
-        source: "devforum",
+        source: "devforum" as const,
         estimatedTotal: 100,
         batchSize: 20,
         runBatch: async () => {
           await devForumPipeline.seed();
           return { processed: 20, done: true, needsRebuild: true, logDetail: "20 topics" };
         },
+        ...(embeddingIndexer
+          ? {
+              buildEmbeddings: async () => {
+                const keys = await store.keys();
+                const forumKeys = keys.filter((k) => k.startsWith("devforum:"));
+                const docs = await Promise.all(
+                  forumKeys.map(async (k) => {
+                    const record = await store.get<{ title?: string; excerpt?: string }>(k);
+                    return {
+                      id: k,
+                      source: "devforum",
+                      text: record ? `${record.title ?? ""} ${record.excerpt ?? ""}`.trim() : k,
+                    };
+                  }),
+                );
+                await embeddingIndexer.indexSource("devforum", docs);
+              },
+            }
+          : {}),
       },
     ],
   });

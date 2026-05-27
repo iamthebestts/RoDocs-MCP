@@ -60,10 +60,7 @@ describe("EmbeddingIndexer", () => {
       { id: "doc1", source: "docs", text: "Hello world" },
       { id: "doc2", source: "docs", text: "Roblox scripting" },
     ];
-    mockEmbed.mockResolvedValue([
-      new Float32Array(384).fill(0.1),
-      new Float32Array(384).fill(0.2),
-    ]);
+    mockEmbed.mockResolvedValue([new Float32Array(384).fill(0.1), new Float32Array(384).fill(0.2)]);
 
     await indexer.indexSource("docs", docs);
 
@@ -76,12 +73,11 @@ describe("EmbeddingIndexer", () => {
       { id: "a", source: "docs", text: "doc a" },
       { id: "b", source: "guides", text: "guide b" },
     ];
-    mockEmbed.mockResolvedValue([
-      new Float32Array(384).fill(0.1),
-      new Float32Array(384).fill(0.2),
-    ]);
-    await indexer.indexSource("docs", [docs[0]!]);
-    await indexer.indexSource("guides", [docs[1]!]);
+    mockEmbed.mockResolvedValue([new Float32Array(384).fill(0.1), new Float32Array(384).fill(0.2)]);
+    const [docA, docB] = docs;
+    if (!docA || !docB) throw new Error("test setup");
+    await indexer.indexSource("docs", [docA]);
+    await indexer.indexSource("guides", [docB]);
 
     await indexer.clearSource("docs");
 

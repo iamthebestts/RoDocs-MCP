@@ -382,9 +382,9 @@ describe("SeedManager", () => {
 
     expect(rebuildIndex).toHaveBeenCalledOnce();
     expect(buildEmbeddings).toHaveBeenCalledOnce();
-    expect(rebuildIndex.mock.invocationCallOrder[0]).toBeLessThan(
-      buildEmbeddings.mock.invocationCallOrder[0]!,
-    );
+    const rebuildOrder = rebuildIndex.mock.invocationCallOrder[0] ?? 0;
+    const embedOrder = buildEmbeddings.mock.invocationCallOrder[0] ?? 0;
+    expect(rebuildOrder).toBeLessThan(embedOrder);
   });
 
   it("buildEmbeddings error does not affect seed completion status", async () => {

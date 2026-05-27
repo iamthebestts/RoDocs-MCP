@@ -1,12 +1,12 @@
 import type Database from "better-sqlite3";
-import type { EmbedDoc } from "../types/index.js";
 import type { IKeyValueStore } from "../store/store-interface.js";
-import { embed } from "./embedder.js";
+import type { EmbedDoc } from "../types/index.js";
 import { observe } from "../utils/logger.js";
+import { embed } from "./embedder.js";
 
 export class EmbeddingIndexer {
   constructor(
-    private readonly store: IKeyValueStore,
+    _store: IKeyValueStore,
     private readonly db: Database.Database,
   ) {}
 
