@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Indexer, LmdbStore, SyncStateManager } from "../../store/index.js";
+import type { IKeyValueStore, Indexer, SyncStateManager } from "../../store/index.js";
 import type { DevForumFetcher } from "../fetcher.js";
 import { DevForumPipeline } from "../pipeline.js";
 import type { DevForumTopicDetail } from "../types.js";
@@ -8,7 +8,7 @@ vi.mock("../fetcher.js");
 
 describe("DevForum Pipeline", () => {
   let pipeline: DevForumPipeline;
-  let mockStore: LmdbStore;
+  let mockStore: IKeyValueStore;
   let mockSyncManager: SyncStateManager;
   let mockIndexer: Indexer;
   let mockFetcher: DevForumFetcher;
@@ -16,7 +16,7 @@ describe("DevForum Pipeline", () => {
   beforeEach(() => {
     mockStore = {
       put: vi.fn().mockResolvedValue(undefined),
-    } as unknown as LmdbStore;
+    } as unknown as IKeyValueStore;
     mockSyncManager = {
       updateSourceState: vi.fn().mockResolvedValue(undefined),
     } as unknown as SyncStateManager;

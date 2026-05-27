@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { LmdbStore } from "../../store/index.js";
+import type { IKeyValueStore } from "../../store/index.js";
 import type { Indexer } from "../../store/indexer.js";
 import { _setLogEventSinkForTesting, type LogEvent } from "../../utils/logger.js";
 import {
@@ -21,8 +21,8 @@ class MemoryStore {
   }
 }
 
-function asStore(store: MemoryStore): LmdbStore {
-  return store as unknown as LmdbStore;
+function asStore(store: MemoryStore): IKeyValueStore {
+  return store as unknown as IKeyValueStore;
 }
 
 function record(overrides: Partial<DevForumRecord>): DevForumRecord {
@@ -355,7 +355,7 @@ describe("searchDevForumStore observability", () => {
     };
   }
 
-  function storeWith(records: DevForumRecord[]): LmdbStore {
+  function storeWith(records: DevForumRecord[]): IKeyValueStore {
     const data = new Map<string, unknown>(records.map((r) => [`devforum:${r.id}`, r]));
     return {
       async keys() {
@@ -364,7 +364,7 @@ describe("searchDevForumStore observability", () => {
       async get<T>(key: string): Promise<T | null> {
         return (data.get(key) as T | undefined) ?? null;
       },
-    } as unknown as LmdbStore;
+    } as unknown as IKeyValueStore;
   }
 
   beforeEach(() => {

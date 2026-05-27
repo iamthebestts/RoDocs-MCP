@@ -2,7 +2,7 @@ import net from "node:net";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, it, vi } from "vitest";
 import type { ServerInstance } from "../../server/index.js";
-import type { LmdbStore } from "../../store/index.js";
+import type { IKeyValueStore } from "../../store/index.js";
 import { encodeFrame, FrameDecoder } from "../daemon-protocol.js";
 import { type DaemonServerContext, startDaemonServer } from "../daemon-server.js";
 
@@ -17,8 +17,8 @@ class FakeStore {
   clear = vi.fn(async () => {});
 }
 
-function asStore(store: FakeStore): LmdbStore {
-  return store as unknown as LmdbStore;
+function asStore(store: FakeStore): IKeyValueStore {
+  return store as unknown as IKeyValueStore;
 }
 
 function createEchoServer(): (context: DaemonServerContext) => ServerInstance {

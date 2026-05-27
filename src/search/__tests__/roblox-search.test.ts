@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DevForumRecord } from "../../devforum/types.js";
 import type { FastFlag } from "../../fastflags/parser.js";
 import { _resetFastFlagsIndexForTesting } from "../../fastflags/search.js";
-import type { LmdbStore } from "../../store/index.js";
+import type { IKeyValueStore } from "../../store/index.js";
 import { robloxSearch } from "../roblox-search.js";
 
 const searchState = vi.hoisted(() => ({
@@ -27,8 +27,8 @@ class MemoryStore {
   }
 }
 
-function asStore(store: MemoryStore): LmdbStore {
-  return store as unknown as LmdbStore;
+function asStore(store: MemoryStore): IKeyValueStore {
+  return store as unknown as IKeyValueStore;
 }
 
 function flag(name: string, description = "Controls a data store experiment"): FastFlag {

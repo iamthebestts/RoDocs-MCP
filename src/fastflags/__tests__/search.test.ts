@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { LmdbStore } from "../../store/index.js";
+import type { IKeyValueStore } from "../../store/index.js";
 import type { Indexer } from "../../store/indexer.js";
 import { _setLogEventSinkForTesting, type LogEvent } from "../../utils/logger.js";
 import type { FastFlag } from "../parser.js";
@@ -35,8 +35,8 @@ class MockStore {
   }
 }
 
-function asStore(mock: MockStore): LmdbStore {
-  return mock as unknown as LmdbStore;
+function asStore(mock: MockStore): IKeyValueStore {
+  return mock as unknown as IKeyValueStore;
 }
 
 describe("FastFlagSearch", () => {
