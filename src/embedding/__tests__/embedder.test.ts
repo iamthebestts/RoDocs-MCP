@@ -5,8 +5,8 @@ vi.mock("../model.js", () => ({
   _resetModelForTesting: vi.fn(),
 }));
 
-import { _resetModelForTesting, loadModel } from "../model.js";
 import { embed } from "../embedder.js";
+import { _resetModelForTesting, loadModel } from "../model.js";
 
 const mockLoadModel = vi.mocked(loadModel);
 
@@ -37,9 +37,7 @@ describe("embed()", () => {
   });
 
   it("returns empty array for empty input", async () => {
-    mockLoadModel.mockResolvedValue(
-      vi.fn() as unknown as Awaited<ReturnType<typeof loadModel>>,
-    );
+    mockLoadModel.mockResolvedValue(vi.fn() as unknown as Awaited<ReturnType<typeof loadModel>>);
     const results = await embed([]);
     expect(results).toHaveLength(0);
     expect(mockLoadModel).not.toHaveBeenCalled();

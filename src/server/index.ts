@@ -225,9 +225,10 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
   }
 
   let embeddingIndexer: EmbeddingIndexer | null = null;
-  if (store instanceof SqliteStore) {
+  if (typeof (store as unknown as Record<string, unknown>)["getDb"] === "function") {
     try {
-      embeddingIndexer = new EmbeddingIndexer(store, store.getDb());
+      const db = (store as unknown as { getDb(): import("better-sqlite3").Database }).getDb();
+      embeddingIndexer = new EmbeddingIndexer(store, db);
     } catch {
       logger.warn("[Server] EmbeddingIndexer could not be initialized; hybrid search disabled");
     }
