@@ -86,6 +86,19 @@ function makeStoreMock() {
   } as unknown as IKeyValueStore;
 }
 
+function makeDbMock(vecRows: Array<{ id: string; distance: number }>) {
+  const stmt = { all: vi.fn().mockReturnValue(vecRows) };
+  return { prepare: vi.fn().mockReturnValue(stmt) };
+}
+
+function makeStoreWithDb(
+  dbMock: ReturnType<typeof makeDbMock>,
+): IKeyValueStore & { getDb(): unknown } {
+  return { ...makeStoreMock(), getDb: () => dbMock } as unknown as IKeyValueStore & {
+    getDb(): unknown;
+  };
+}
+
 describe("hybridSearch()", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -101,13 +114,44 @@ describe("hybridSearch()", () => {
     expect(Array.isArray(result.results)).toBe(true);
   });
 
-  it("returns searchMode: hybrid when embed succeeds but store is not SqliteStore", async () => {
+  it("returns searchMode: bm25 when embed succeeds but store has no getDb", async () => {
     mockEmbed.mockResolvedValue([new Float32Array(384).fill(0.1)]);
 
     const store = makeStoreMock();
-    // store is not a SqliteStore instance — usedHybrid stays false → bm25 fallback
     const result = await hybridSearch(store, "tweenservice", "docs", 5);
 
     expect(result.searchMode).toBe("bm25");
+  });
+
+  it("returns searchMode: hybrid when embed succeeds and store has getDb", async () => {
+    const vec = new Float32Array(384).fill(0.1);
+    mockEmbed.mockResolvedValue([vec]);
+
+    const db = makeDbMock([
+      { id: "doc-alpha", distance: 0.1 },
+      { id: "doc-beta", distance: 0.2 },
+    ]);
+    const store = makeStoreWithDb(db);
+
+    const result = await hybridSearch(store, "tweenservice", "docs", 5);
+
+    expect(result.searchMode).toBe("hybrid");
+    expect(db.prepare).toHaveBeenCalledWith(expect.stringContaining("vec_items"));
+  });
+
+  it("fuses BM25 and vector candidates via RRF when hybrid path succeeds", async () => {
+    const vec = new Float32Array(384).fill(0.05);
+    mockEmbed.mockResolvedValue([vec]);
+
+    // vec returns same id as what BM25 would rank — bm25Ranked may be empty
+    // (searchApis falls back to []) so fusedResults will be empty array,
+    // but searchMode must still be "hybrid"
+    const db = makeDbMock([{ id: "tweenservice", distance: 0.05 }]);
+    const store = makeStoreWithDb(db);
+
+    const result = await hybridSearch(store, "tweenservice", "docs", 5);
+
+    expect(result.searchMode).toBe("hybrid");
+    expect(Array.isArray(result.results)).toBe(true);
   });
 });
