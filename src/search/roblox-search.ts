@@ -6,6 +6,7 @@ import type { IKeyValueStore } from "../store/index.js";
 import type { BM25Doc, SearchResult } from "../types/index.js";
 import { BM25 } from "./bm25.js";
 import { markDuplicates } from "./dedup.js";
+import { type HybridSource, hybridSearch } from "./hybrid.js";
 import { searchApisLocal, searchGuidesLocal } from "./index.js";
 import { applyRecencyBoost } from "./recency.js";
 
@@ -18,6 +19,8 @@ export interface RobloxSearchOptions {
   source?: RobloxSearchSource | undefined;
   limit?: number | undefined;
   githubToken?: string | undefined;
+  /** When true, uses hybrid BM25 + vector search with RRF. Default: false. */
+  hybrid?: boolean | undefined;
 }
 
 export interface FastFlagSearchResult {
@@ -176,6 +179,33 @@ export async function robloxSearch(
 ): Promise<RobloxSearchResult> {
   const source = options.source ?? "all";
   const limit = normalizeLimit(options.limit);
+
+  if (options.hybrid === true) {
+    const hybridSources: HybridSource[] = ["docs", "guides", "devforum", "all"];
+    const hybridSource = hybridSources.includes(source as HybridSource)
+      ? (source as HybridSource)
+      : "all";
+    const hybridResult = await hybridSearch(
+      store,
+      options.query,
+      hybridSource,
+      limit,
+      options.githubToken,
+    );
+    return {
+      query: options.query,
+      source,
+      limit,
+      results: {
+        docs: hybridResult.results,
+        guides: [],
+        fastflags: [],
+        devforum: [],
+      },
+      searchMode: hybridResult.searchMode,
+    } as RobloxSearchResult & { searchMode: string };
+  }
+
   const messages: string[] = [];
 
   const results: RobloxSearchResult["results"] = {

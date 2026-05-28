@@ -1,10 +1,16 @@
+import type Database from "better-sqlite3";
 import { searchDevForumStore } from "../devforum/search.js";
 import { embed } from "../embedding/embedder.js";
-import { SqliteStore } from "../store/sqlite-store.js";
 import type { IKeyValueStore } from "../store/store-interface.js";
 import type { SearchResult } from "../types/index.js";
 import { logger } from "../utils/logger.js";
 import { searchApis, searchGuides } from "./index.js";
+
+type StoreWithDb = IKeyValueStore & { getDb(): Database.Database };
+
+function hasGetDb(store: IKeyValueStore): store is StoreWithDb {
+  return typeof (store as unknown as Record<string, unknown>)["getDb"] === "function";
+}
 
 export interface RRFEntry {
   id: string;
@@ -91,7 +97,7 @@ export async function hybridSearch(
   try {
     const queryVec = await embed([query]);
     const qv = queryVec[0];
-    if (qv && store instanceof SqliteStore) {
+    if (qv && hasGetDb(store)) {
       const db = store.getDb();
       const rows = db
         .prepare<[Uint8Array, string, number], { id: string; distance: number }>(

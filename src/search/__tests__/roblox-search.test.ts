@@ -261,4 +261,15 @@ describe("robloxSearch", () => {
     expect(result.results.docs[0]?.isDuplicate).toBeUndefined();
     expect(result.results.guides[0]?.isDuplicate).toBe(true);
   });
+
+  it("does not expose searchMode when hybrid is not set (default behavior unchanged)", async () => {
+    searchState.searchApisLocal.mockResolvedValue([]);
+    searchState.searchGuidesLocal.mockResolvedValue([]);
+    const result = await robloxSearch(asStore(new MemoryStore()), {
+      query: "TweenService",
+      source: "docs",
+      limit: 5,
+    });
+    expect((result as { searchMode?: unknown }).searchMode).toBeUndefined();
+  });
 });
