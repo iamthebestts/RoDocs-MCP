@@ -12,6 +12,24 @@ import {
   isPong,
 } from "./daemon-protocol.js";
 
+/**
+ * Default startup budget for auto-starting the daemon. Windows cold start
+ * (spawn Node + open SQLite + load persisted state) routinely takes 3-8s, so a
+ * short budget makes the client give up and fall back to isolated stdio mode.
+ * Override with the RODOCS_DAEMON_RETRY_MS env var.
+ */
+export const DEFAULT_STARTUP_RETRY_MS = 10_000;
+
+function resolveStartupRetryMs(
+  explicit: number | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  if (explicit !== undefined) return explicit;
+  const raw = Number(env.RODOCS_DAEMON_RETRY_MS);
+  if (Number.isFinite(raw) && raw > 0) return raw;
+  return DEFAULT_STARTUP_RETRY_MS;
+}
+
 export interface DaemonClientOptions {
   githubToken?: string;
   retryMs?: number;
@@ -27,7 +45,7 @@ export interface DaemonClientOptions {
 }
 
 export async function runDaemonClient(options: DaemonClientOptions): Promise<void> {
-  const retryMs = options.retryMs ?? 2_000;
+  const retryMs = resolveStartupRetryMs(options.retryMs);
   const stderr = options.stderr ?? process.stderr;
   const connect = options.connect ?? (() => connectToDaemon());
   const sleep = options.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));

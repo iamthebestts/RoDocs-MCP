@@ -195,6 +195,81 @@ describe("daemon client", () => {
     expect(spawnDaemon).toHaveBeenCalledOnce();
   });
 
+  it("tolerates a slow Windows cold start with the default startup budget", async () => {
+    // Fake socket so ClientBridge can attach without a real connection.
+    const readySocket = new PassThrough() as unknown as net.Socket;
+    readySocket.write = vi.fn(() => true) as unknown as net.Socket["write"];
+    readySocket.end = vi.fn() as unknown as net.Socket["end"];
+
+    let now = 0;
+    const fallback = vi.fn(async () => {});
+    const spawnDaemon = vi.fn();
+
+    // Daemon needs ~6s before it accepts connections.
+    await runDaemonClient({
+      fallback,
+      spawnDaemon,
+      acquireLock: async () => createLock(),
+      connect: async () => {
+        if (now < 6_000) {
+          const error = new Error("refused") as NodeJS.ErrnoException;
+          error.code = "ECONNREFUSED";
+          throw error;
+        }
+        return readySocket;
+      },
+      now: () => now,
+      sleep: async (ms) => {
+        now += ms;
+      },
+      // No retryMs → must use the default startup budget.
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+    });
+
+    expect(fallback).not.toHaveBeenCalled();
+  });
+
+  it("honors the RODOCS_DAEMON_RETRY_MS override", async () => {
+    const previous = process.env.RODOCS_DAEMON_RETRY_MS;
+    process.env.RODOCS_DAEMON_RETRY_MS = "8000";
+    try {
+      const readySocket = new PassThrough() as unknown as net.Socket;
+      readySocket.write = vi.fn(() => true) as unknown as net.Socket["write"];
+      readySocket.end = vi.fn() as unknown as net.Socket["end"];
+
+      let now = 0;
+      const fallback = vi.fn(async () => {});
+
+      await runDaemonClient({
+        fallback,
+        spawnDaemon: vi.fn(),
+        acquireLock: async () => createLock(),
+        connect: async () => {
+          if (now < 6_000) {
+            const error = new Error("refused") as NodeJS.ErrnoException;
+            error.code = "ECONNREFUSED";
+            throw error;
+          }
+          return readySocket;
+        },
+        now: () => now,
+        sleep: async (ms) => {
+          now += ms;
+        },
+        stdin: new PassThrough(),
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+      });
+
+      expect(fallback).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.RODOCS_DAEMON_RETRY_MS;
+      else process.env.RODOCS_DAEMON_RETRY_MS = previous;
+    }
+  });
+
   it("falls back after unexpected daemon close when reconnect fails", async () => {
     const socket = new PassThrough() as unknown as net.Socket;
     socket.write = vi.fn(() => true) as unknown as net.Socket["write"];
