@@ -49,6 +49,8 @@ export interface SeedManagerOptions {
   rateLimiters?: Partial<Record<SeedSource, Pick<RateLimiter, "acquire">>>;
   logger?: SeedLogger;
   yieldFn?: () => Promise<void>;
+  /** Schedules the next batch tick. Injectable for deterministic tests. */
+  scheduleFn?: (callback: () => void, delayMs: number) => void;
 }
 
 export interface SeedSyncManager {
@@ -75,6 +77,10 @@ const DEFAULT_ESTIMATED_TOTALS: Record<SeedSource, number> = {
 };
 
 const DEFAULT_PRIORITY: SeedSource[] = ["docs", "guides", "fastflags", "devforum"];
+
+/** Base + ceiling for exponential backoff after a source's batch fails. */
+const SEED_RETRY_BASE_MS = 1_000;
+const SEED_RETRY_MAX_MS = 30_000;
 
 function defaultYield(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
@@ -111,9 +117,12 @@ export class SeedManager {
   private readonly rateLimiters: Partial<Record<SeedSource, Pick<RateLimiter, "acquire">>>;
   private readonly logger: SeedLogger;
   private readonly yieldFn: () => Promise<void>;
+  private readonly scheduleFn: (callback: () => void, delayMs: number) => void;
   private readonly priorityQueue: SeedSource[] = [...DEFAULT_PRIORITY];
   private readonly demandedSources = new Set<SeedSource>();
   private readonly progress = new Map<SeedSource, SeedProgress>();
+  private readonly failureStreak = new Map<SeedSource, number>();
+  private backoffMs = 0;
   private running = false;
   private scheduled = false;
   private startedAt = 0;
@@ -124,6 +133,11 @@ export class SeedManager {
     this.rateLimiters = options.rateLimiters ?? {};
     this.logger = options.logger ?? console;
     this.yieldFn = options.yieldFn ?? defaultYield;
+    this.scheduleFn =
+      options.scheduleFn ??
+      ((callback, delayMs) => {
+        setTimeout(callback, delayMs);
+      });
 
     for (const source of SEED_SOURCES) {
       this.progress.set(source, this.createInitialProgress(source));
@@ -202,11 +216,45 @@ export class SeedManager {
     try {
       await this.rateLimiters[source]?.acquire();
       await this.runBatch(source, runner);
+      this.failureStreak.delete(source);
+      this.backoffMs = 0;
       this.demandedSources.delete(source);
+      await this.yieldFn();
+      return true;
+    } catch (err: unknown) {
+      // Isolate any seed error (network failure, rate limit, malformed data).
+      // The source is left retryable and picked up again on the next cycle,
+      // after a capped exponential backoff so a stuck source can't hot-loop.
+      this.logger.error(
+        `[Seed] ${source}: batch failed (will retry): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      await this.markRetryable(source);
+      this.registerFailure(source);
       await this.yieldFn();
       return true;
     } finally {
       this.running = false;
+    }
+  }
+
+  private registerFailure(source: SeedSource): void {
+    const streak = (this.failureStreak.get(source) ?? 0) + 1;
+    this.failureStreak.set(source, streak);
+    this.backoffMs = Math.min(SEED_RETRY_MAX_MS, SEED_RETRY_BASE_MS * 2 ** (streak - 1));
+  }
+
+  private async markRetryable(source: SeedSource): Promise<void> {
+    const current = this.getProgress(source);
+    const status: SeedStatus = current.seededItems > 0 ? "partial" : "pending";
+    if (current.status === status) return;
+    const updated: SeedProgress = { ...current, status };
+    this.progress.set(source, updated);
+    try {
+      await this.persistProgress(updated);
+    } catch {
+      // Persisting retryable state is best-effort; never let it escape.
     }
   }
 
@@ -294,14 +342,26 @@ export class SeedManager {
   private scheduleNext(): void {
     if (this.scheduled) return;
     this.scheduled = true;
-    setTimeout(() => {
+    const delay = this.backoffMs;
+    this.backoffMs = 0;
+    this.scheduleFn(() => {
       this.scheduled = false;
-      void this.processNextBatch().then((processed) => {
-        if (processed || this.nextSource() !== null) {
-          this.scheduleNext();
-        }
-      });
-    }, 0);
+      // Final safety net: an error here must never become an unhandled
+      // rejection (which Node 24 promotes to uncaughtException, killing the
+      // process). Log and keep the pipeline cycling if work remains.
+      void this.processNextBatch()
+        .then((processed) => {
+          if (processed || this.nextSource() !== null) {
+            this.scheduleNext();
+          }
+        })
+        .catch((err: unknown) => {
+          this.logger.error(
+            `[Seed] scheduler error: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          if (this.nextSource() !== null) this.scheduleNext();
+        });
+    }, delay);
   }
 
   private nextSource(): SeedSource | null {

@@ -27,6 +27,13 @@ function createIdleDetector(isIdle = true) {
   return { isIdle: vi.fn(() => isIdle) };
 }
 
+async function flushMicrotasks(): Promise<void> {
+  // A setImmediate boundary drains the entire pending microtask queue,
+  // letting an in-flight processNextBatch() chain settle and reschedule.
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
 describe("SeedManager", () => {
   let syncManager: MemorySyncManager;
   let logger: { error: ReturnType<typeof vi.fn<(message: string) => void>> };
@@ -108,6 +115,180 @@ describe("SeedManager", () => {
       batchSize: 3,
     });
     expect(manager.getProgress("fastflags").seededItems).toBe(3);
+  });
+
+  it("isolates a failing batch instead of rejecting", async () => {
+    const manager = new SeedManager({
+      syncManager,
+      idleDetector: createIdleDetector(true),
+      runners: [
+        {
+          source: "fastflags",
+          estimatedTotal: 12,
+          batchSize: DEFAULT_SEED_BATCH_SIZES.fastflags,
+          runBatch: async () => {
+            throw new Error("ECONNABORTED");
+          },
+        },
+      ],
+      logger,
+      yieldFn,
+    });
+    manager.prioritize("fastflags");
+
+    // Must resolve (not reject) so the error can never become an unhandled rejection.
+    await expect(manager.processNextBatch()).resolves.toBe(true);
+    expect(logger.error).toHaveBeenCalled();
+    // A failed source stays retryable, never silently "complete".
+    expect(manager.getProgress("fastflags").status).not.toBe("complete");
+  });
+
+  it("retries a source that failed on the previous cycle", async () => {
+    let attempts = 0;
+    const runBatch = vi.fn(async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("transient network error");
+      return { processed: 12, done: true };
+    });
+    const manager = new SeedManager({
+      syncManager,
+      idleDetector: createIdleDetector(true),
+      runners: [
+        {
+          source: "fastflags",
+          estimatedTotal: 12,
+          batchSize: DEFAULT_SEED_BATCH_SIZES.fastflags,
+          runBatch,
+        },
+      ],
+      logger,
+      yieldFn,
+    });
+    manager.prioritize("fastflags");
+
+    await manager.processNextBatch();
+    expect(manager.getProgress("fastflags").status).not.toBe("complete");
+
+    await manager.processNextBatch();
+    expect(runBatch).toHaveBeenCalledTimes(2);
+    expect(manager.getProgress("fastflags").status).toBe("complete");
+  });
+
+  it("does not let a failing source block lower-priority sources", async () => {
+    const guidesRunBatch = vi.fn(async () => ({ processed: 50, done: true }));
+    const manager = new SeedManager({
+      syncManager,
+      idleDetector: createIdleDetector(true),
+      runners: [
+        {
+          source: "docs",
+          estimatedTotal: 350,
+          batchSize: DEFAULT_SEED_BATCH_SIZES.docs,
+          runBatch: async () => {
+            throw new Error("docs is down");
+          },
+        },
+        {
+          source: "guides",
+          estimatedTotal: 350,
+          batchSize: DEFAULT_SEED_BATCH_SIZES.guides,
+          runBatch: guidesRunBatch,
+        },
+      ],
+      logger,
+      yieldFn,
+    });
+
+    // docs is priority 1 and fails; guides (priority 2) must still get a turn
+    // once docs is demoted. Demand guides so it can run on the next pass.
+    await manager.processNextBatch();
+    manager.prioritize("guides");
+    await manager.processNextBatch();
+
+    expect(guidesRunBatch).toHaveBeenCalled();
+    expect(manager.getProgress("guides").status).toBe("complete");
+  });
+
+  it("applies capped exponential backoff to a persistently failing source", async () => {
+    const delays: number[] = [];
+    const pending: Array<() => void> = [];
+    let attempts = 0;
+    const manager = new SeedManager({
+      syncManager,
+      idleDetector: createIdleDetector(true),
+      runners: [
+        {
+          source: "docs",
+          estimatedTotal: 350,
+          batchSize: DEFAULT_SEED_BATCH_SIZES.docs,
+          runBatch: async () => {
+            attempts += 1;
+            // Fail enough times to reach (and exceed) the backoff ceiling.
+            if (attempts <= 8) throw new Error("always fails");
+            return { processed: 350, done: true };
+          },
+        },
+      ],
+      logger,
+      yieldFn,
+      scheduleFn: (cb, ms) => {
+        delays.push(ms);
+        pending.push(cb);
+      },
+    });
+
+    manager.startBackground();
+
+    for (let i = 0; i < 8 && pending.length > 0; i++) {
+      const cb = pending.shift();
+      cb?.();
+      await flushMicrotasks();
+    }
+
+    expect(delays[0]).toBe(0); // first tick is immediate
+    expect(delays[1]).toBeGreaterThan(0); // backoff kicks in after the first failure
+    expect(delays[2]).toBeGreaterThan(delays[1] as number); // grows on consecutive failures
+    expect(Math.max(...delays)).toBeLessThanOrEqual(30_000); // and is capped
+    expect(delays.some((d) => d === 30_000)).toBe(true); // reaches the ceiling
+  });
+
+  it("resets the retry delay after a successful batch", async () => {
+    const delays: number[] = [];
+    const pending: Array<() => void> = [];
+    let attempts = 0;
+    const manager = new SeedManager({
+      syncManager,
+      idleDetector: createIdleDetector(true),
+      runners: [
+        {
+          source: "docs",
+          estimatedTotal: 350,
+          batchSize: DEFAULT_SEED_BATCH_SIZES.docs,
+          runBatch: async () => {
+            attempts += 1;
+            if (attempts === 1) throw new Error("transient");
+            return { processed: 350, done: true };
+          },
+        },
+      ],
+      logger,
+      yieldFn,
+      scheduleFn: (cb, ms) => {
+        delays.push(ms);
+        pending.push(cb);
+      },
+    });
+
+    manager.startBackground();
+
+    for (let i = 0; i < 2 && pending.length > 0; i++) {
+      const cb = pending.shift();
+      cb?.();
+      await flushMicrotasks();
+    }
+
+    expect(delays[1]).toBeGreaterThan(0); // backed off after the failure
+    expect(delays[2]).toBe(0); // reset to immediate once the batch succeeded
   });
 
   it("yields to the event loop between batches", async () => {
