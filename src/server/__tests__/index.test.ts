@@ -63,6 +63,8 @@ const serverState = vi.hoisted(() => {
     FakeMcpServer,
     initIndexer: vi.fn(),
     warmUp: vi.fn(),
+    ensureApiIndex: vi.fn(async () => {}),
+    ensureGuideIndex: vi.fn(async () => {}),
     scrapeIndex: vi.fn(),
     scrapeMany: vi.fn(),
     scrapeTopic: vi.fn(),
@@ -115,6 +117,8 @@ vi.mock("../../search/index.js", () => ({
   search: serverState.search,
   searchGuides: serverState.searchGuides,
   warmUp: serverState.warmUp,
+  ensureApiIndex: serverState.ensureApiIndex,
+  ensureGuideIndex: serverState.ensureGuideIndex,
 }));
 
 vi.mock("../../search/roblox-search.js", () => ({
@@ -271,7 +275,7 @@ describe("server", () => {
     expect(server.prompts.has("roblox-dev-assistant")).toBe(true);
   }, 30000);
 
-  it("starts quickly with background seeding scheduled after registration", async () => {
+  it("starts quickly and defers background seeding off the construction path", async () => {
     const { createServer } = await loadServer();
     const startedAt = performance.now();
     const result = createServer() as unknown as ServerInstance;
@@ -280,6 +284,12 @@ describe("server", () => {
 
     expect(elapsedMs).toBeLessThan(100);
     expect(server.tools.size).toBeGreaterThan(0);
+    // Seed must NOT start synchronously during construction — the initialize
+    // handshake must never block on it.
+    expect(serverState.seedManagers[0]?.startBackground).not.toHaveBeenCalled();
+
+    // It starts on a later tick (after the caller has wired/awaited connect).
+    await new Promise<void>((resolve) => setImmediate(resolve));
     expect(serverState.seedManagers[0]?.startBackground).toHaveBeenCalledOnce();
 
     result.shutdown();

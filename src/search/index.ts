@@ -378,6 +378,20 @@ export function warmUp(githubToken?: string): void {
   void buildGuideIndex(githubToken);
 }
 
+/**
+ * Awaitable warmups. Unlike {@link warmUp} (fire-and-forget), these resolve
+ * only once the index is actually queryable and reject if the build fails,
+ * so the seed pipeline can mark a source "complete" accurately and retry on
+ * failure instead of silently swallowing errors.
+ */
+export function ensureApiIndex(githubToken?: string): Promise<void> {
+  return buildApiIndex(githubToken);
+}
+
+export function ensureGuideIndex(githubToken?: string): Promise<void> {
+  return buildGuideIndex(githubToken);
+}
+
 export function _resetIndexesForTesting(opts?: { guideScoreThreshold?: number }): void {
   indexer = null;
   apiIndexing = null;

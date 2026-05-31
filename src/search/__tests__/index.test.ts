@@ -81,6 +81,8 @@ vi.mock("../../scraper/guides.js", () => ({
 import type { Indexer } from "../../store/indexer.js";
 import {
   _resetIndexesForTesting,
+  ensureApiIndex,
+  ensureGuideIndex,
   initIndexer,
   search,
   searchApis,
@@ -267,6 +269,26 @@ describe("search", () => {
   describe("warmUp", () => {
     it("executes without throwing", () => {
       expect(() => warmUp()).not.toThrow();
+    });
+  });
+
+  describe("ensureApiIndex / ensureGuideIndex (awaitable warmups)", () => {
+    it("resolves once the API index is built", async () => {
+      await expect(ensureApiIndex()).resolves.toBeUndefined();
+    });
+
+    it("resolves once the guide index is built", async () => {
+      await expect(ensureGuideIndex()).resolves.toBeUndefined();
+    });
+
+    it("rejects when the API index build fails", async () => {
+      mockFetchIndex.mockRejectedValueOnce(new Error("github down"));
+      await expect(ensureApiIndex()).rejects.toThrow("github down");
+    });
+
+    it("rejects when the guide index build fails", async () => {
+      mockFetchGuideIndex.mockRejectedValueOnce(new Error("guides down"));
+      await expect(ensureGuideIndex()).rejects.toThrow("guides down");
     });
   });
 });

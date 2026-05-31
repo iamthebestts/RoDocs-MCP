@@ -11,7 +11,13 @@ import { SeedManager, type SeedSource } from "../scheduler/seed-manager.js";
 import type { ApiKind, CodeSample, RichMember, RobloxDocEntry } from "../scraper/fetch.js";
 import { fetchGuide, fetchGuideIndex } from "../scraper/guides.js";
 import { scrapeIndex, scrapeMany, scrapeTopic } from "../scraper/index.js";
-import { initIndexer, search, searchGuides, warmUp } from "../search/index.js";
+import {
+  ensureApiIndex,
+  ensureGuideIndex,
+  initIndexer,
+  search,
+  searchGuides,
+} from "../search/index.js";
 import { ROBLOX_SEARCH_SOURCES, robloxSearch } from "../search/roblox-search.js";
 import {
   createSyncStateManager,
@@ -258,7 +264,10 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
         estimatedTotal: 350,
         batchSize: 50,
         runBatch: async () => {
-          warmUp(githubToken);
+          // Await the build so the source is only marked complete once the API
+          // index is queryable; a failure propagates and keeps it retryable.
+          // Safe to await here: seed runs off the initialize handshake path.
+          await ensureApiIndex(githubToken);
           return { processed: 50, done: true, logDetail: "50 paths" };
         },
       },
@@ -267,7 +276,7 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
         estimatedTotal: 350,
         batchSize: 50,
         runBatch: async () => {
-          warmUp(githubToken);
+          await ensureGuideIndex(githubToken);
           return { processed: 50, done: true, logDetail: "50 paths" };
         },
       },
@@ -1041,7 +1050,10 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
 
   if (options.autoStartScheduler !== false) {
     scheduler.start();
-    seedManager.startBackground();
+    // Defer the seed start to a later tick so it can never run before the
+    // caller has wired the transport and answered the MCP `initialize`
+    // handshake. startBackground() is idempotent, so a single deferral is safe.
+    setImmediate(() => seedManager.startBackground());
   }
 
   return { server, scheduler, seedManager, shutdown };
