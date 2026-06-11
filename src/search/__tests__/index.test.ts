@@ -94,7 +94,7 @@ import {
 } from "../index.js";
 
 function initMissingPersistedIndexer() {
-  initIndexer({ getPath: () => "C:/tmp/rodocs-missing-store/store.lmdb" } as never, {} as never);
+  initIndexer({ getPath: () => "C:/tmp/rodocs-missing-store/store.db" } as never, {} as never);
 }
 
 describe("search", () => {

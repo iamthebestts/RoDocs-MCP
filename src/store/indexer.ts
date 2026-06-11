@@ -1,9 +1,9 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { decode, encode } from "@msgpack/msgpack";
 import type { BM25, BM25Doc } from "../search/bm25.js";
-import { observe, startTimer } from "../utils/logger.js";
+import { logger, observe, startTimer } from "../utils/logger.js";
 import type { IKeyValueStore } from "./store-interface.js";
 import type { SyncStateManager } from "./sync-state.js";
 
@@ -20,7 +20,7 @@ interface SerializedIndex {
  */
 export class Indexer {
   private readonly basePath: string;
-  private readonly clearCallbacks = new Map<string, () => void>();
+  private readonly clearCallbacks = new Map<string, Set<() => void>>();
 
   constructor(
     readonly _store: IKeyValueStore,
@@ -32,9 +32,15 @@ export class Indexer {
   /**
    * Registers a callback to be invoked when clear() is called for the given source.
    * Allows in-memory caches to be invalidated alongside the on-disk index.
+   * Multiple callbacks per source are supported; the same function is registered once.
    */
   onClear(source: string, callback: () => void): void {
-    this.clearCallbacks.set(source, callback);
+    let callbacks = this.clearCallbacks.get(source);
+    if (callbacks === undefined) {
+      callbacks = new Set();
+      this.clearCallbacks.set(source, callbacks);
+    }
+    callbacks.add(callback);
   }
 
   private getIndexPath(source: string): string {
@@ -80,11 +86,16 @@ export class Indexer {
   async clear(source: string): Promise<void> {
     observe({ event: "indexer.clear", source });
     try {
-      await writeFile(this.getIndexPath(source), "");
-    } catch (_error) {
-      // Ignore
+      await rm(this.getIndexPath(source), { force: true });
+    } catch (error) {
+      // A failed delete leaves a stale index on disk; surface it instead of hiding it.
+      logger.warn(
+        `[Indexer] failed to delete persisted index for "${source}": ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
     }
-    this.clearCallbacks.get(source)?.();
+    for (const callback of this.clearCallbacks.get(source) ?? []) callback();
   }
 
   /**

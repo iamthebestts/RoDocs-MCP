@@ -39,17 +39,17 @@ export interface SyncState {
 
 /**
  * Manager for sync state per data source
- * Uses LMDB store for persistence
+ * Persists through the key-value store abstraction (SQLite-backed by default)
  */
 export class SyncStateManager {
-  constructor(private lmdbStore: import("./store-interface.js").IKeyValueStore) {}
+  constructor(private store: import("./store-interface.js").IKeyValueStore) {}
 
   /**
    * Get sync state for a specific source
    */
   async getSourceState(sourceKey: string): Promise<SyncState | null> {
     const key = `sync:${sourceKey}`;
-    return await this.lmdbStore.get<SyncState>(key);
+    return await this.store.get<SyncState>(key);
   }
 
   /**
@@ -64,7 +64,7 @@ export class SyncStateManager {
       ...state,
     };
 
-    await this.lmdbStore.put(key, updated);
+    await this.store.put(key, updated);
   }
 
   /**
@@ -72,14 +72,14 @@ export class SyncStateManager {
    */
   async clearSourceState(sourceKey: string): Promise<void> {
     const key = `sync:${sourceKey}`;
-    await this.lmdbStore.del(key);
+    await this.store.del(key);
   }
 
   /**
    * Get all source keys with sync state
    */
   async getAllSourceKeys(): Promise<string[]> {
-    const allKeys = await this.lmdbStore.keys();
+    const allKeys = await this.store.keys();
     return allKeys.filter((key) => key.startsWith("sync:")).map((key) => key.replace("sync:", ""));
   }
 

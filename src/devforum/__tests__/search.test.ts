@@ -43,7 +43,7 @@ function record(overrides: Partial<DevForumRecord>): DevForumRecord {
 }
 
 describe("searchDevForumStore (fallback path — no Indexer)", () => {
-  // These tests exercise the existing per-call LMDB path (no initDevForumSearch called).
+  // These tests exercise the existing per-call store-scan path (no initDevForumSearch called).
   beforeEach(() => {
     _resetDevForumIndexForTesting();
   });

@@ -8,7 +8,7 @@ export interface IKeyValueStore {
   close(): Promise<undefined | unknown>;
   isOpen(): boolean;
   /**
-   * Returns the full path to the backing store file (e.g. store.lmdb or store.db).
+   * Returns the full path to the backing store file (e.g. store.db).
    * Not the directory — the file. Consumers that need the directory must strip the filename.
    */
   getPath(): string;

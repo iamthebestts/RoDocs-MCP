@@ -114,7 +114,7 @@ function ageDays(record: DevForumRecord): number {
 
 async function fetchDevForumRecords(store: IKeyValueStore): Promise<readonly DevForumRecord[]> {
   // Use the singleton cache when the DevForum index has been pre-warmed,
-  // avoiding a full LMDB key-scan + record fetch on every search call.
+  // avoiding a full store key-scan + record fetch on every search call.
   const cached = getCachedDevForumRecords();
   if (cached.length > 0) return cached;
 

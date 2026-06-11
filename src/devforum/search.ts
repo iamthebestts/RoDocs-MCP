@@ -244,7 +244,7 @@ export async function searchDevForumStore(
       return { query: options.query, results };
     }
 
-    // Fallback: per-call LMDB scan (used when no Indexer is registered, e.g. in unit tests).
+    // Fallback: per-call store scan (used when no Indexer is registered, e.g. in unit tests).
     const keys = (await store.keys()).filter((key) => key.startsWith("devforum:"));
     if (keys.length === 0) {
       return {

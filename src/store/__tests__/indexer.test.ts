@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -64,6 +64,19 @@ describe("Indexer", () => {
     expect(loaded).toBe(false);
   });
 
+  it("removes the persisted index file from disk on clear()", async () => {
+    bm25.index([{ id: "doc1", fields: { title: "test" } }]);
+    await indexer.save(bm25, "test");
+
+    await indexer.clear("test");
+
+    await expect(access(join(tempDir, "test.index.msgpack"))).rejects.toThrow();
+  });
+
+  it("clear() succeeds when no index file exists", async () => {
+    await expect(indexer.clear("never-saved")).resolves.toBeUndefined();
+  });
+
   it("calls the registered onClear callback when clear() is invoked", async () => {
     let called = false;
     indexer.onClear("mySource", () => {
@@ -73,6 +86,29 @@ describe("Indexer", () => {
     await indexer.clear("mySource");
 
     expect(called).toBe(true);
+  });
+
+  it("invokes every callback registered for the same source", async () => {
+    const calls: string[] = [];
+    indexer.onClear("shared", () => calls.push("first"));
+    indexer.onClear("shared", () => calls.push("second"));
+
+    await indexer.clear("shared");
+
+    expect(calls).toEqual(["first", "second"]);
+  });
+
+  it("registers an identical callback only once per source", async () => {
+    let count = 0;
+    const callback = (): void => {
+      count += 1;
+    };
+    indexer.onClear("shared", callback);
+    indexer.onClear("shared", callback);
+
+    await indexer.clear("shared");
+
+    expect(count).toBe(1);
   });
 
   it("does not call callback for unrelated sources", async () => {

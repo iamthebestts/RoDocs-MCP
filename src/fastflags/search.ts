@@ -29,7 +29,7 @@ export function _resetFastFlagsIndexForTesting(): void {
 }
 
 /**
- * Search service for FastFlags stored in LMDB.
+ * Search service for FastFlags persisted in the key-value store.
  * Builds a BM25 index once per session; invalidated automatically when new flags are written.
  */
 export class FastFlagSearch {
