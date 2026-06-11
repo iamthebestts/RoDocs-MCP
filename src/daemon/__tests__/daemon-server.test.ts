@@ -9,7 +9,7 @@ import { type DaemonServerContext, startDaemonServer } from "../daemon-server.js
 class FakeStore {
   open = vi.fn(async () => {});
   close = vi.fn(async () => {});
-  getPath = vi.fn(() => "/tmp/rodocsmcp-test/store.lmdb");
+  getPath = vi.fn(() => "/tmp/rodocsmcp-test/store.db");
   get = vi.fn(async () => null);
   keys = vi.fn(async () => []);
   put = vi.fn(async (_key: string, _value: unknown) => {});

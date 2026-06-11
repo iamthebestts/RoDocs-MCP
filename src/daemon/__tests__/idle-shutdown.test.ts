@@ -29,14 +29,57 @@ describe("IdleShutdown", () => {
     vi.useRealTimers();
   });
 
-  it("cancels shutdown state when a new connection arrives", () => {
+  it("rejects a connection that arrives while shutdown is in flight", async () => {
+    let resolveShutdown: () => void = () => {};
+    const onShutdown = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveShutdown = resolve;
+        }),
+    );
+    const idle = new IdleShutdown({ idleMs: 60_000, onShutdown });
+
+    const shutdown = idle.beginShutdown();
+    expect(idle.state).toBe("shutting_down");
+
+    // A committed shutdown cannot be cancelled and accepts no new connections.
+    expect(idle.connectionOpened({})).toBe(false);
+    expect(idle.activeCount).toBe(0);
+    expect(idle.state).toBe("shutting_down");
+
+    resolveShutdown();
+    await shutdown;
+    expect(idle.state).toBe("closed");
+  });
+
+  it("does not revert an in-flight shutdown via cancelShutdown", async () => {
+    let resolveShutdown: () => void = () => {};
+    const idle = new IdleShutdown({
+      idleMs: 60_000,
+      onShutdown: () =>
+        new Promise<void>((resolve) => {
+          resolveShutdown = resolve;
+        }),
+    });
+
+    const shutdown = idle.beginShutdown();
+    idle.cancelShutdown();
+
+    expect(idle.state).toBe("shutting_down");
+    resolveShutdown();
+    await shutdown;
+    expect(idle.state).toBe("closed");
+  });
+
+  it("accepts a connection while the idle timer is merely pending", () => {
+    vi.useFakeTimers();
     const idle = new IdleShutdown({ idleMs: 60_000, onShutdown: async () => {} });
-    idle.state = "shutting_down";
 
-    idle.connectionOpened({});
-
-    expect(idle.state).toBe("ready");
+    idle.scheduleIfIdle(); // timer armed, shutdown not yet started
+    expect(idle.connectionOpened({})).toBe(true);
     expect(idle.activeCount).toBe(1);
+    expect(idle.state).toBe("ready");
+    vi.useRealTimers();
   });
 
   it("increments and decrements active count once per lifecycle", () => {

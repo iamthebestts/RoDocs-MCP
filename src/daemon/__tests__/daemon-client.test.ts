@@ -270,6 +270,41 @@ describe("daemon client", () => {
     }
   });
 
+  it("skips malformed stdin lines without crashing the bridge", async () => {
+    const socket = new PassThrough() as unknown as net.Socket;
+    const writes: Buffer[] = [];
+    socket.write = vi.fn((data: Buffer) => {
+      writes.push(data);
+      return true;
+    }) as unknown as net.Socket["write"];
+    socket.end = vi.fn() as unknown as net.Socket["end"];
+
+    const stdin = new PassThrough();
+    const stderr = new PassThrough();
+    const fallback = vi.fn(async () => {});
+
+    await runDaemonClient({
+      fallback,
+      connect: async () => socket,
+      retryMs: 100,
+      stdin,
+      stdout: new PassThrough(),
+      stderr,
+    });
+
+    stdin.write("{this is not json\n");
+    stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/list" })}\n`);
+
+    await vi.waitFor(() => {
+      expect(writes.length).toBe(1);
+    });
+    const decoder = new FrameDecoder();
+    const messages = [...decoder.push(writes[0] as Buffer)];
+    expect(messages[0]).toMatchObject({ method: "tools/list" });
+    expect(fallback).not.toHaveBeenCalled();
+    stdin.end();
+  });
+
   it("falls back after unexpected daemon close when reconnect fails", async () => {
     const socket = new PassThrough() as unknown as net.Socket;
     socket.write = vi.fn(() => true) as unknown as net.Socket["write"];

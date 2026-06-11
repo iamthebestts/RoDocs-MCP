@@ -1,7 +1,6 @@
 import net from "node:net";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
-import { initIndexer } from "../search/index.js";
 import { createServer, type ServerInstance } from "../server/index.js";
 import {
   createSyncStateManager,
@@ -114,7 +113,6 @@ export async function startDaemonServer(
     await store.open();
     opened = true;
     const syncManager = createSyncStateManager(store);
-    initIndexer(store, syncManager);
     serializeStoreWrites(store);
 
     const idle = new IdleShutdown({
@@ -130,9 +128,14 @@ export async function startDaemonServer(
     });
 
     tcpServer = net.createServer((socket) => {
-      if (idle.state === "shutting_down") idle.cancelShutdown();
       const token = {};
-      idle.connectionOpened(token);
+      if (!idle.connectionOpened(token)) {
+        // Shutdown already committed: refuse the socket so the client falls back
+        // to its retry/spawn path against a fresh daemon instead of racing a
+        // store that is being closed underneath it.
+        socket.destroy();
+        return;
+      }
 
       let handshaken = false;
       let closed = false;

@@ -223,12 +223,13 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
   const syncManager = options.syncManager ?? createSyncStateManager(store);
 
   // Single shared Indexer so that write-side invalidation (scraper/pipeline) reaches
-  // the in-memory caches registered via onClear() in the search modules.
+  // the in-memory caches registered via onClear() in the search modules. Always wire
+  // the search singletons to it — including when store/syncManager are external (daemon
+  // path) — otherwise devforum search degrades to a full-scan fallback and pipeline
+  // writes never invalidate the in-memory BM25 caches.
   const sharedIndexer = new Indexer(store, syncManager);
-  if (options.store === undefined || options.syncManager === undefined) {
-    initIndexer(store, syncManager, sharedIndexer);
-    initDevForumSearch(sharedIndexer);
-  }
+  initIndexer(store, syncManager, sharedIndexer);
+  initDevForumSearch(sharedIndexer);
 
   let embeddingIndexer: EmbeddingIndexer | null = null;
   if (typeof (store as unknown as Record<string, unknown>)["getDb"] === "function") {

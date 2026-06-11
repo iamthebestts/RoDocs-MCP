@@ -34,15 +34,18 @@ export class IdleShutdown {
     this.lastActivity = this.now();
   }
 
-  connectionOpened(token: object): void {
-    if (this.state === "shutting_down") {
-      this.cancelShutdown();
-    }
-    if (this.state === "closed") return;
+  /**
+   * Registers a new connection. Returns false when shutdown has already started
+   * (or finished) — the connection must be refused, because the in-flight
+   * onShutdown() will close shared resources and cannot be cancelled.
+   */
+  connectionOpened(token: object): boolean {
+    if (this.state !== "ready") return false;
     this.activeConnections += 1;
     this.closeSeen.delete(token);
     this.recordActivity();
     this.clearTimer();
+    return true;
   }
 
   connectionClosed(token: object): void {
@@ -87,8 +90,9 @@ export class IdleShutdown {
   }
 
   cancelShutdown(): void {
-    if (this.state === "closed") return;
-    this.state = "ready";
+    // Only a pending idle timer can be cancelled. Once onShutdown() has started
+    // (state "shutting_down"), the shutdown is committed and runs to completion.
+    if (this.state !== "ready") return;
     this.clearTimer();
     this.recordActivity();
   }

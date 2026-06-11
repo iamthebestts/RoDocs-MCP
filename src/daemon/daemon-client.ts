@@ -228,7 +228,16 @@ class ClientBridge {
       const line = this.stdinBuffer.toString("utf8", 0, newline).replace(/\r$/, "");
       this.stdinBuffer = this.stdinBuffer.subarray(newline + 1);
       if (line.trim() === "") continue;
-      const parsed = JSONRPCMessageSchema.parse(JSON.parse(line)) as JSONRPCMessage;
+      let parsed: JSONRPCMessage;
+      try {
+        parsed = JSONRPCMessageSchema.parse(JSON.parse(line)) as JSONRPCMessage;
+      } catch (error) {
+        // A malformed stdin line must never crash the bridge; drop it and keep reading.
+        this.options.stderr.write(
+          `rodocsmcp ignored malformed stdin line: ${error instanceof Error ? error.message : String(error)}\n`,
+        );
+        continue;
+      }
       void writeSocket(this.socket, encodeFrame(parsed)).catch(() => this.reconnectOrFallback());
     }
   };
