@@ -122,7 +122,7 @@ export class SeedManager {
   private readonly demandedSources = new Set<SeedSource>();
   private readonly progress = new Map<SeedSource, SeedProgress>();
   private readonly failureStreak = new Map<SeedSource, number>();
-  private backoffMs = 0;
+  private readonly backoffBySource = new Map<SeedSource, number>();
   private running = false;
   private scheduled = false;
   private startedAt = 0;
@@ -217,7 +217,7 @@ export class SeedManager {
       await this.rateLimiters[source]?.acquire();
       await this.runBatch(source, runner);
       this.failureStreak.delete(source);
-      this.backoffMs = 0;
+      this.backoffBySource.delete(source);
       this.demandedSources.delete(source);
       await this.yieldFn();
       return true;
@@ -242,7 +242,10 @@ export class SeedManager {
   private registerFailure(source: SeedSource): void {
     const streak = (this.failureStreak.get(source) ?? 0) + 1;
     this.failureStreak.set(source, streak);
-    this.backoffMs = Math.min(SEED_RETRY_MAX_MS, SEED_RETRY_BASE_MS * 2 ** (streak - 1));
+    this.backoffBySource.set(
+      source,
+      Math.min(SEED_RETRY_MAX_MS, SEED_RETRY_BASE_MS * 2 ** (streak - 1)),
+    );
   }
 
   private async markRetryable(source: SeedSource): Promise<void> {
@@ -342,8 +345,11 @@ export class SeedManager {
   private scheduleNext(): void {
     if (this.scheduled) return;
     this.scheduled = true;
-    const delay = this.backoffMs;
-    this.backoffMs = 0;
+    // Per-source retry backoff: delay the tick by the backoff of the source that
+    // runs next, so one source's penalty is never consumed or wiped by activity
+    // on other sources. Cleared only when that source succeeds.
+    const next = this.nextSource();
+    const delay = next === null ? 0 : (this.backoffBySource.get(next) ?? 0);
     this.scheduleFn(() => {
       this.scheduled = false;
       // Final safety net: an error here must never become an unhandled

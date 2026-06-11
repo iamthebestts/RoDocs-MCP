@@ -252,6 +252,48 @@ describe("SeedManager", () => {
     expect(delays.some((d) => d === 30_000)).toBe(true); // reaches the ceiling
   });
 
+  it("preserves a failing source's backoff when another source succeeds", async () => {
+    const delays: number[] = [];
+    const pending: Array<() => void> = [];
+    const manager = new SeedManager({
+      syncManager,
+      idleDetector: createIdleDetector(true),
+      runners: [
+        {
+          source: "docs",
+          estimatedTotal: 350,
+          batchSize: DEFAULT_SEED_BATCH_SIZES.docs,
+          runBatch: async () => {
+            throw new Error("docs keeps failing");
+          },
+        },
+        {
+          source: "guides",
+          estimatedTotal: 350,
+          batchSize: DEFAULT_SEED_BATCH_SIZES.guides,
+          runBatch: async () => ({ processed: 350, done: true }),
+        },
+      ],
+      logger,
+      yieldFn,
+      scheduleFn: (cb, ms) => {
+        delays.push(ms);
+        pending.push(cb);
+      },
+    });
+
+    manager.startBackground();
+    pending.shift()?.(); // docs fails → backoff armed
+    await flushMicrotasks();
+
+    manager.prioritize("guides");
+    pending.shift()?.(); // guides runs and succeeds
+    await flushMicrotasks();
+
+    expect(delays[1]).toBeGreaterThan(0); // docs backed off after its failure
+    expect(delays[2]).toBe(delays[1]); // docs' backoff survives guides' success
+  });
+
   it("resets the retry delay after a successful batch", async () => {
     const delays: number[] = [];
     const pending: Array<() => void> = [];
