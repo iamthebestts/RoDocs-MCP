@@ -78,9 +78,10 @@ export async function hybridSearch(
     for (const hit of r.results) {
       bm25Candidates.push({
         type: "devforum",
-        name: hit.title,
+        name: `devforum:${hit.id}`,
         path: hit.url,
         score: hit.score,
+        title: hit.title,
       } as unknown as SearchResult);
     }
   }

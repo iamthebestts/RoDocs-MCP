@@ -2,8 +2,6 @@ import { resolve as resolvePath } from "node:path";
 import { pathToFileURL } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { runDaemonClient, startDaemonServer } from "../daemon/index.js";
-import { DevForumPipeline } from "../devforum/pipeline.js";
-import { FastFlagScraper } from "../fastflags/scraper.js";
 import { MetricsCollector } from "../metrics/collector.js";
 import { formatMetricsReport } from "../metrics/reporter.js";
 import type {
@@ -16,10 +14,16 @@ import type {
 import { fetchGuide, searchGuides } from "../scraper/guides.js";
 import { findClosestApiName, scrapeIndex, scrapeTopic } from "../scraper/index.js";
 import { createServer } from "../server/index.js";
-import { createSyncStateManager, SqliteStore } from "../store/index.js";
-import { Indexer } from "../store/indexer.js";
+import {
+  openSeedContext,
+  seedDevforum,
+  seedDocs,
+  seedFastflags,
+  seedGuides,
+} from "./seed-runner.js";
 import { parseGithubTokenArgs } from "../utils/github-token.js";
 import { _setMetricsSink } from "../utils/logger.js";
+import { createCliSeedProgressReporter } from "./seed-progress.js";
 import { runSetup } from "./setup.js";
 
 const W = 76;
@@ -362,8 +366,11 @@ function printHelp(): void {
       `  ${c("green", "rodocsmcp")} ${c("yellow", "--github-token <token>")}    Authenticate GitHub requests`,
       "",
       `  ${dim("Maintenance:")}`,
+      `  ${c("green", "rodocsmcp")} ${c("yellow", "--seed-docs")}              Build API reference search index`,
+      `  ${c("green", "rodocsmcp")} ${c("yellow", "--seed-guides")}            Build creator guides search index`,
       `  ${c("green", "rodocsmcp")} ${c("yellow", "--seed-fastflags")}          Seed FastFlags from MaximumADHD`,
       `  ${c("green", "rodocsmcp")} ${c("yellow", "--seed-devforum")}           Seed DevForum curated content`,
+      `  ${c("green", "rodocsmcp")} ${c("yellow", "--seed-all")}                Run all seeds (devforum last)`,
       `  ${c("green", "rodocsmcp")} ${c("yellow", "--daemon")}                  Start local TCP daemon ${dim("(port 30030)")}`,
       `  ${c("green", "rodocsmcp")} ${c("yellow", "--client")}                  Bridge MCP stdio through daemon`,
       `  ${c("green", "rodocsmcp")} ${c("yellow", "--help")} ${dim("| -h")}                Show this help`,
@@ -602,17 +609,49 @@ export async function main(
     return;
   }
 
-  if (first === "--seed-fastflags") {
-    process.stderr.write(`${dim("Seeding FastFlags...")}\n`);
+  if (first === "--seed-docs") {
+    const progress = createCliSeedProgressReporter("docs");
     try {
-      const store = new SqliteStore();
-      await store.open();
-      const syncManager = createSyncStateManager(store);
-      const indexer = new Indexer(store, syncManager);
-      const scraper = new FastFlagScraper(store, syncManager, indexer);
+      progress.onPhase("store", "opening local cache");
+      const { store } = await openSeedContext();
+      await seedDocs(store, githubToken, progress);
+      progress.onPhase("done", "API index ready");
+      process.stdout.write(`${c("green", "✔")} Successfully seeded API docs index.\n`);
+      await store.close();
+    } catch (err: unknown) {
+      process.stderr.write(
+        `${c("red", "✖")} Failed to seed docs: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+      process.exit(1);
+    }
+    return;
+  }
 
-      const { added, updated } = await scraper.seed(githubToken);
+  if (first === "--seed-guides") {
+    const progress = createCliSeedProgressReporter("guides");
+    try {
+      progress.onPhase("store", "opening local cache");
+      const { store } = await openSeedContext();
+      await seedGuides(store, githubToken, progress);
+      progress.onPhase("done", "guides index ready");
+      process.stdout.write(`${c("green", "✔")} Successfully seeded guides index.\n`);
+      await store.close();
+    } catch (err: unknown) {
+      process.stderr.write(
+        `${c("red", "✖")} Failed to seed guides: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+      process.exit(1);
+    }
+    return;
+  }
 
+  if (first === "--seed-fastflags") {
+    const progress = createCliSeedProgressReporter("fastflags");
+    try {
+      progress.onPhase("store", "opening local cache");
+      const { store, syncManager, indexer } = await openSeedContext();
+      const { added, updated } = await seedFastflags(store, syncManager, indexer, githubToken, progress);
+      progress.onPhase("done", `${added} added, ${updated} updated`);
       process.stdout.write(
         `${c("green", "✔")} Successfully seeded FastFlags: ${bold(String(added))} added, ${bold(String(updated))} updated.\n`,
       );
@@ -627,16 +666,23 @@ export async function main(
   }
 
   if (first === "--seed-devforum") {
-    process.stderr.write(`${dim("Seeding DevForum...")}\n`);
+    const progress = createCliSeedProgressReporter("devforum");
     try {
-      const store = new SqliteStore();
-      await store.open();
-      const syncManager = createSyncStateManager(store);
-      const indexer = new Indexer(store, syncManager);
-      const pipeline = new DevForumPipeline(store, syncManager, indexer);
-
-      const { added, lowScore, failed, rejected, bm25Invalidated } = await pipeline.seed();
-
+      progress.onPhase("store", "opening local cache");
+      const { store, syncManager, indexer } = await openSeedContext();
+      progress.onNote(
+        "Rate-limited DevForum API — discovery can take several minutes. Updates appear below.",
+      );
+      const { added, lowScore, failed, rejected, bm25Invalidated } = await seedDevforum(
+        store,
+        syncManager,
+        indexer,
+        progress,
+      );
+      progress.onPhase(
+        "done",
+        `${added} added, ${lowScore} low score, ${failed} failed, ${rejected} filtered`,
+      );
       process.stdout.write(
         `${c("green", "✔")} Successfully seeded DevForum content: ${bold(String(added))} added, ${bold(String(rejected))} filtered, ${bold(String(lowScore))} low score, ${bold(String(failed))} failed. BM25 invalidated: ${String(bm25Invalidated)}.\n`,
       );
@@ -644,6 +690,51 @@ export async function main(
     } catch (err: unknown) {
       process.stderr.write(
         `${c("red", "✖")} Failed to seed DevForum: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (first === "--seed-all") {
+    try {
+      const allProgress = createCliSeedProgressReporter("all");
+      allProgress.onPhase("store", "opening local cache");
+      const { store, syncManager, indexer } = await openSeedContext();
+
+      const docsProgress = createCliSeedProgressReporter("docs");
+      await seedDocs(store, githubToken, docsProgress);
+      docsProgress.onPhase("done", "complete");
+
+      const guidesProgress = createCliSeedProgressReporter("guides");
+      await seedGuides(store, githubToken, guidesProgress);
+      guidesProgress.onPhase("done", "complete");
+
+      const flagsProgress = createCliSeedProgressReporter("fastflags");
+      const { added: flagsAdded, updated: flagsUpdated } = await seedFastflags(
+        store,
+        syncManager,
+        indexer,
+        githubToken,
+        flagsProgress,
+      );
+      flagsProgress.onPhase("done", `${flagsAdded} added, ${flagsUpdated} updated`);
+
+      const devforumProgress = createCliSeedProgressReporter("devforum");
+      devforumProgress.onNote(
+        "Rate-limited DevForum API — discovery can take several minutes. Updates appear below.",
+      );
+      const devforum = await seedDevforum(store, syncManager, indexer, devforumProgress);
+      devforumProgress.onPhase(
+        "done",
+        `${devforum.added} added, ${devforum.failed} failed`,
+      );
+
+      process.stdout.write(`${c("green", "✔")} Successfully completed all seeds.\n`);
+      await store.close();
+    } catch (err: unknown) {
+      process.stderr.write(
+        `${c("red", "✖")} Failed during --seed-all: ${err instanceof Error ? err.message : String(err)}\n`,
       );
       process.exit(1);
     }

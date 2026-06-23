@@ -610,6 +610,30 @@ describe("SeedManager", () => {
     expect(rebuildOrder).toBeLessThan(embedOrder);
   });
 
+  it("calls buildEmbeddings without needsRebuild when configured", async () => {
+    const buildEmbeddings = vi.fn(async () => {});
+    const manager = new SeedManager({
+      syncManager,
+      idleDetector: createIdleDetector(true),
+      runners: [
+        {
+          source: "docs",
+          estimatedTotal: 50,
+          batchSize: DEFAULT_SEED_BATCH_SIZES.docs,
+          runBatch: async () => ({ processed: 50, done: true }),
+          buildEmbeddings,
+        },
+      ],
+      logger,
+      yieldFn,
+    });
+
+    manager.prioritize("docs");
+    await manager.processNextBatch();
+
+    expect(buildEmbeddings).toHaveBeenCalledOnce();
+  });
+
   it("buildEmbeddings error does not affect seed completion status", async () => {
     const buildEmbeddings = vi.fn(async () => {
       throw new Error("model load failed");

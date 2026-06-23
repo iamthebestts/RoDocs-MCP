@@ -4,6 +4,12 @@ import { setupRateLimiter } from "../devforum/http.js";
 import { DevForumPipeline } from "../devforum/pipeline.js";
 import { initDevForumSearch, searchDevForumStore } from "../devforum/search.js";
 import { EmbeddingIndexer } from "../embedding/embedding-indexer.js";
+import {
+  buildDevforumEmbedDocs,
+  buildDocsEmbedDocs,
+  buildFastflagsEmbedDocs,
+  buildGuidesEmbedDocs,
+} from "../embedding/sources.js";
 import { FastFlagScraper } from "../fastflags/scraper.js";
 import { FastFlagSearch } from "../fastflags/search.js";
 import { Scheduler } from "../scheduler/index.js";
@@ -271,6 +277,14 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
           await ensureApiIndex(githubToken);
           return { processed: 50, done: true, logDetail: "50 paths" };
         },
+        ...(embeddingIndexer
+          ? {
+              buildEmbeddings: async () => {
+                const docs = await buildDocsEmbedDocs(githubToken);
+                await embeddingIndexer.indexSource("docs", docs);
+              },
+            }
+          : {}),
       },
       {
         source: "guides",
@@ -280,6 +294,14 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
           await ensureGuideIndex(githubToken);
           return { processed: 50, done: true, logDetail: "50 paths" };
         },
+        ...(embeddingIndexer
+          ? {
+              buildEmbeddings: async () => {
+                const docs = await buildGuidesEmbedDocs(githubToken);
+                await embeddingIndexer.indexSource("guides", docs);
+              },
+            }
+          : {}),
       },
       {
         source: "fastflags" as const,
@@ -292,18 +314,7 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
         ...(embeddingIndexer
           ? {
               buildEmbeddings: async () => {
-                const keys = await store.keys();
-                const flagKeys = keys.filter((k) => k.startsWith("fastflags:"));
-                const docs = await Promise.all(
-                  flagKeys.map(async (k) => {
-                    const record = await store.get<{ name: string; description?: string }>(k);
-                    return {
-                      id: k,
-                      source: "fastflags",
-                      text: record ? `${record.name} ${record.description ?? ""}`.trim() : k,
-                    };
-                  }),
-                );
+                const docs = await buildFastflagsEmbedDocs(store);
                 await embeddingIndexer.indexSource("fastflags", docs);
               },
             }
@@ -320,18 +331,7 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
         ...(embeddingIndexer
           ? {
               buildEmbeddings: async () => {
-                const keys = await store.keys();
-                const forumKeys = keys.filter((k) => k.startsWith("devforum:"));
-                const docs = await Promise.all(
-                  forumKeys.map(async (k) => {
-                    const record = await store.get<{ title?: string; excerpt?: string }>(k);
-                    return {
-                      id: k,
-                      source: "devforum",
-                      text: record ? `${record.title ?? ""} ${record.excerpt ?? ""}`.trim() : k,
-                    };
-                  }),
-                );
+                const docs = await buildDevforumEmbedDocs(store);
                 await embeddingIndexer.indexSource("devforum", docs);
               },
             }

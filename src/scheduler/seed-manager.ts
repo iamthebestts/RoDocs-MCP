@@ -303,14 +303,14 @@ export class SeedManager {
     if (updated.status === "complete") {
       if (updated.needsRebuild) {
         await runner.rebuildIndex?.();
+      }
 
-        if (runner.buildEmbeddings) {
-          runner.buildEmbeddings().catch((err: unknown) => {
-            this.logger.error(
-              `[Seed] ${source}: buildEmbeddings failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
-            );
-          });
-        }
+      if (runner.buildEmbeddings) {
+        runner.buildEmbeddings().catch((err: unknown) => {
+          this.logger.error(
+            `[Seed] ${source}: buildEmbeddings failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
       }
       this.logger.error(`[Seed] ${source}: complete (${updated.seededItems} entries)`);
     }
