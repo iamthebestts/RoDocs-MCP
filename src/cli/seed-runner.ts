@@ -9,9 +9,14 @@ import {
 } from "../embedding/sources.js";
 import { FastFlagScraper } from "../fastflags/scraper.js";
 import { ensureApiIndex, ensureGuideIndex, initIndexer } from "../search/index.js";
-import { createSyncStateManager, type IKeyValueStore, Indexer, SqliteStore } from "../store/index.js";
 import type { SeedProgressReporter } from "../seed/progress.js";
 import { noopSeedProgress } from "../seed/progress.js";
+import {
+  createSyncStateManager,
+  type IKeyValueStore,
+  Indexer,
+  SqliteStore,
+} from "../store/index.js";
 
 type StoreWithDb = IKeyValueStore & { getDb(): Database.Database };
 
@@ -92,9 +97,14 @@ export async function seedDevforum(
 
   const embeddingIndexer = createEmbeddingIndexer(store);
   if (embeddingIndexer && result.added > 0) {
+    const embedStartedAt = Date.now();
     reporter.onPhase("embed", "generating devforum embedding vectors");
     const docs = await buildDevforumEmbedDocs(store);
     await embeddingIndexer.indexSource("devforum", docs);
+    reporter.onPhaseEnd?.("embed", {
+      elapsedMs: Date.now() - embedStartedAt,
+      detail: `${docs.length} vectors`,
+    });
   }
 
   return result;

@@ -28,6 +28,7 @@ describe("DevForum Pipeline", () => {
       put: vi.fn().mockResolvedValue(undefined),
     } as unknown as IKeyValueStore;
     mockSyncManager = {
+      getSourceState: vi.fn().mockResolvedValue(null),
       updateSourceState: vi.fn().mockResolvedValue(undefined),
     } as unknown as SyncStateManager;
     mockIndexer = {
@@ -119,6 +120,43 @@ describe("DevForum Pipeline", () => {
     expect(phases).toContain("rank");
     expect(phases).toContain("fetch");
     expect(phases).toContain("index");
+  });
+
+  it("should skip discovery when a fresh cache exists", async () => {
+    const cachedAt = Date.now();
+    vi.mocked(mockSyncManager.getSourceState).mockResolvedValue({
+      metadata: {
+        discoveryCache: {
+          cachedAt,
+          candidates: [
+            {
+              topic: {
+                id: 1,
+                title: "Topic 1",
+                slug: "t1",
+                posts_count: 2,
+                reply_count: 1,
+                views: 10000,
+                like_count: 50,
+                has_accepted_answer: true,
+                created_at: new Date().toISOString(),
+                closed: false,
+              },
+              source: "top-monthly",
+              tier: "top",
+              weight: 4,
+            },
+          ],
+        },
+      },
+    });
+
+    const result = await pipeline.seed();
+
+    expect(result.discoveryFromCache).toBe(true);
+    expect(mockFetcher.getCategories).not.toHaveBeenCalled();
+    expect(mockFetcher.search).not.toHaveBeenCalled();
+    expect(result.added).toBe(1);
   });
 
   it("should emit a single aggregated warning for unresolved category slugs", async () => {

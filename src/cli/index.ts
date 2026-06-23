@@ -14,6 +14,9 @@ import type {
 import { fetchGuide, searchGuides } from "../scraper/guides.js";
 import { findClosestApiName, scrapeIndex, scrapeTopic } from "../scraper/index.js";
 import { createServer } from "../server/index.js";
+import { parseGithubTokenArgs } from "../utils/github-token.js";
+import { _setMetricsSink } from "../utils/logger.js";
+import { createCliSeedProgressReporter } from "./seed-progress.js";
 import {
   openSeedContext,
   seedDevforum,
@@ -21,9 +24,6 @@ import {
   seedFastflags,
   seedGuides,
 } from "./seed-runner.js";
-import { parseGithubTokenArgs } from "../utils/github-token.js";
-import { _setMetricsSink } from "../utils/logger.js";
-import { createCliSeedProgressReporter } from "./seed-progress.js";
 import { runSetup } from "./setup.js";
 
 const W = 76;
@@ -650,7 +650,13 @@ export async function main(
     try {
       progress.onPhase("store", "opening local cache");
       const { store, syncManager, indexer } = await openSeedContext();
-      const { added, updated } = await seedFastflags(store, syncManager, indexer, githubToken, progress);
+      const { added, updated } = await seedFastflags(
+        store,
+        syncManager,
+        indexer,
+        githubToken,
+        progress,
+      );
       progress.onPhase("done", `${added} added, ${updated} updated`);
       process.stdout.write(
         `${c("green", "✔")} Successfully seeded FastFlags: ${bold(String(added))} added, ${bold(String(updated))} updated.\n`,
@@ -670,21 +676,10 @@ export async function main(
     try {
       progress.onPhase("store", "opening local cache");
       const { store, syncManager, indexer } = await openSeedContext();
-      progress.onNote(
-        "Rate-limited DevForum API — discovery can take several minutes. Updates appear below.",
-      );
-      const { added, lowScore, failed, rejected, bm25Invalidated } = await seedDevforum(
-        store,
-        syncManager,
-        indexer,
-        progress,
-      );
-      progress.onPhase(
-        "done",
-        `${added} added, ${lowScore} low score, ${failed} failed, ${rejected} filtered`,
-      );
+      const { added, lowScore, failed, rejected, bm25Invalidated, discoveryFromCache } =
+        await seedDevforum(store, syncManager, indexer, progress);
       process.stdout.write(
-        `${c("green", "✔")} Successfully seeded DevForum content: ${bold(String(added))} added, ${bold(String(rejected))} filtered, ${bold(String(lowScore))} low score, ${bold(String(failed))} failed. BM25 invalidated: ${String(bm25Invalidated)}.\n`,
+        `${c("green", "✔")} Successfully seeded DevForum content: ${bold(String(added))} added, ${bold(String(rejected))} filtered, ${bold(String(lowScore))} low score, ${bold(String(failed))} failed. BM25 invalidated: ${String(bm25Invalidated)}. Discovery cache: ${discoveryFromCache ? "hit" : "miss"}.\n`,
       );
       await store.close();
     } catch (err: unknown) {
@@ -721,14 +716,7 @@ export async function main(
       flagsProgress.onPhase("done", `${flagsAdded} added, ${flagsUpdated} updated`);
 
       const devforumProgress = createCliSeedProgressReporter("devforum");
-      devforumProgress.onNote(
-        "Rate-limited DevForum API — discovery can take several minutes. Updates appear below.",
-      );
-      const devforum = await seedDevforum(store, syncManager, indexer, devforumProgress);
-      devforumProgress.onPhase(
-        "done",
-        `${devforum.added} added, ${devforum.failed} failed`,
-      );
+      await seedDevforum(store, syncManager, indexer, devforumProgress);
 
       process.stdout.write(`${c("green", "✔")} Successfully completed all seeds.\n`);
       await store.close();

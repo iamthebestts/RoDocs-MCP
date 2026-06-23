@@ -3,6 +3,12 @@ import { noopSeedProgress, throttleStep } from "../seed/progress.js";
 import type { IKeyValueStore, Indexer, SyncStateManager } from "../store/index.js";
 import { logger } from "../utils/logger.js";
 import { Semaphore } from "../utils/semaphore.js";
+import {
+  candidatesToMap,
+  loadDiscoveryCache,
+  mapToSerialized,
+  saveDiscoveryCache,
+} from "./discovery-cache.js";
 import { DevForumFetcher } from "./fetcher.js";
 import { shouldRejectTopic } from "./filters.js";
 import { DEVFORUM_HTTP_CONCURRENCY } from "./http.js";
@@ -20,6 +26,11 @@ function readIntEnv(name: string, range: IntRange): number {
     return range.default;
   }
   return parsed;
+}
+
+function readBoolEnv(name: string): boolean {
+  const raw = process.env[name];
+  return raw === "1" || raw === "true";
 }
 
 const CONFIG = Object.freeze({
@@ -83,6 +94,22 @@ const CONFIG = Object.freeze({
     max: 10000,
     default: 800,
   }),
+  maxQueries: readIntEnv("RODOCS_DEVFORUM_MAX_QUERIES", {
+    min: 0,
+    max: EXPANDED_QUERIES.length,
+    default: 40,
+  }),
+  skipSearch: readBoolEnv("RODOCS_DEVFORUM_SKIP_SEARCH"),
+  refreshDiscovery: readBoolEnv("RODOCS_DEVFORUM_REFRESH_DISCOVERY"),
+  discoveryCacheTtlMs:
+    readIntEnv("RODOCS_DEVFORUM_DISCOVERY_CACHE_HOURS", {
+      min: 1,
+      max: 168,
+      default: 24,
+    }) *
+    60 *
+    60 *
+    1000,
 } as const);
 
 type SourceWeight = 0 | 1 | 2 | 3 | 4;
@@ -145,26 +172,233 @@ export class DevForumPipeline {
     failed: number;
     rejected: number;
     bm25Invalidated: boolean;
+    discoveryFromCache: boolean;
   }> {
-    const reporter = throttleStep(options?.reporter ?? noopSeedProgress, 2000);
+    const reporter = throttleStep(options?.reporter ?? noopSeedProgress, 500);
+    const seedStartedAt = Date.now();
+    let phaseStartedAt = seedStartedAt;
+    const startPhase = (phase: string, detail?: string) => {
+      phaseStartedAt = Date.now();
+      reporter.onPhase(phase, detail);
+    };
+    const endPhase = (phase: string, detail?: string) => {
+      reporter.onPhaseEnd?.(phase, {
+        elapsedMs: Date.now() - phaseStartedAt,
+        ...(detail ? { detail } : {}),
+      });
+    };
+
     let added = 0;
     let lowScore = 0;
     let failed = 0;
     let inFlight = 0;
     let bm25Invalidated = false;
+    let discoveryFromCache = false;
+
+    const activeQueries = CONFIG.skipSearch ? [] : EXPANDED_QUERIES.slice(0, CONFIG.maxQueries);
 
     logger.info("[DevForumPipeline] Starting seed process...");
-    reporter.onPhase("categories", "resolving DevForum category map");
 
-    const categories = await this.fetcher.getCategories();
-    const goldCategoryMap = new Map<string, number>();
-    for (const cat of categories) {
-      if (GOLD_CATEGORIES.some((gc) => gc.slug === cat.slug)) {
-        goldCategoryMap.set(cat.slug, cat.id);
+    const candidateTopics = new Map<number, DiscoveryCandidate>();
+
+    if (!CONFIG.refreshDiscovery) {
+      const cached = await loadDiscoveryCache(this.syncManager, CONFIG.discoveryCacheTtlMs);
+      if (cached) {
+        discoveryFromCache = true;
+        const restored = candidatesToMap(cached.candidates);
+        for (const [id, cand] of restored) {
+          candidateTopics.set(id, cand);
+        }
+        startPhase("discovery", `${cached.candidates.length} candidates from cache`);
+        endPhase("discovery", `${cached.candidates.length} cached`);
       }
     }
 
-    const candidateTopics = new Map<number, DiscoveryCandidate>();
+    if (!discoveryFromCache) {
+      startPhase("categories", "resolving DevForum category map");
+
+      const categories = await this.fetcher.getCategories();
+      const goldCategoryMap = new Map<string, number>();
+      for (const cat of categories) {
+        if (GOLD_CATEGORIES.some((gc) => gc.slug === cat.slug)) {
+          goldCategoryMap.set(cat.slug, cat.id);
+        }
+      }
+
+      endPhase("categories");
+
+      const discoveryStats = await this.runDiscovery(
+        candidateTopics,
+        goldCategoryMap,
+        activeQueries,
+        startPhase,
+        reporter,
+      );
+      endPhase(
+        "discovery",
+        `${candidateTopics.size} unique · ${discoveryStats.discoveryTotal} fetches · ${discoveryStats.queryCount} queries`,
+      );
+    }
+
+    startPhase("rank", "scoring and capping topic candidates");
+
+    const uniqueTopics = Array.from(candidateTopics.values())
+      .map((c) => {
+        const t = c.topic;
+        const ageDays = t.created_at
+          ? Math.max(0, (Date.now() - new Date(t.created_at).getTime()) / 86_400_000)
+          : 0;
+        const recencyBoost = ageDays > 0 && ageDays < 365 ? 5 : 0;
+        const acceptedBoost = t.has_accepted_answer ? 15 : 0;
+        const scoreEstimate =
+          Math.min(t.views / 500, 30) +
+          Math.min(t.like_count * 2, 30) +
+          Math.min(t.reply_count ?? 0, 10) +
+          acceptedBoost +
+          recencyBoost;
+        return { ...c, scoreEstimate };
+      })
+      .sort((a, b) => b.weight * 1000 + b.scoreEstimate - (a.weight * 1000 + a.scoreEstimate))
+      .slice(0, CONFIG.maxTopicsTotal);
+
+    logger.info(
+      `[DevForum] discovery fromCache=${discoveryFromCache} unique=${candidateTopics.size} after-prefilter=${uniqueTopics.length} capped=${CONFIG.maxTopicsTotal}`,
+    );
+    reporter.onNote(
+      `candidates: ${candidateTopics.size} unique → ${uniqueTopics.length} after rank (cap ${CONFIG.maxTopicsTotal})`,
+    );
+    endPhase("rank", `${uniqueTopics.length} selected`);
+
+    startPhase("fetch", `downloading ${uniqueTopics.length} topic details`);
+    const sourceCounters: SourceCounters = {
+      topMonthly: 0,
+      gold: 0,
+      high: 0,
+      medium: 0,
+      search: 0,
+    };
+
+    const heartbeat = setInterval(() => {
+      const done = added + lowScore + failed;
+      reporter.onStep(
+        done,
+        uniqueTopics.length,
+        `added=${added} low=${lowScore} failed=${failed} in-flight=${inFlight}`,
+      );
+      logger.debug(
+        `[DevForum] heartbeat in-flight=${inFlight} done=${done}/${uniqueTopics.length} added=${added} lowScore=${lowScore} failed=${failed} ${this.formatMix(sourceCounters)}`,
+      );
+    }, 3000);
+    heartbeat.unref();
+
+    try {
+      await Promise.allSettled(
+        uniqueTopics.map(async (cand, i) => {
+          const { topic: t, source, weight } = cand;
+          await this.semaphore.acquire();
+          inFlight++;
+          const startedAt = Date.now();
+          logger.debug(
+            `[DevForum] [${i + 1}/${uniqueTopics.length}] start topic=${t.id} source=${source}`,
+          );
+
+          try {
+            const detail = await this.fetchTopicWithRetry(t.id);
+            const record = processTopic(detail, weight);
+            record.source = source;
+            const elapsedMs = Date.now() - startedAt;
+
+            if (record.score < CONFIG.minScore) {
+              lowScore++;
+              logger.debug(
+                `[DevForum] [${i + 1}/${uniqueTopics.length}] done  topic=${t.id} score=${record.score} lowScore in ${(elapsedMs / 1000).toFixed(1)}s source=${source}`,
+              );
+            } else {
+              await this.store.put(`devforum:${record.id}`, record);
+              added++;
+              this.bumpCounters(sourceCounters, cand);
+              logger.debug(
+                `[DevForum] [${i + 1}/${uniqueTopics.length}] done  topic=${t.id} score=${record.score} added in ${(elapsedMs / 1000).toFixed(1)}s source=${source} "${record.title}"`,
+              );
+            }
+          } catch (e) {
+            failed++;
+            const reason = e instanceof Error ? e.message : String(e);
+            logger.warn(
+              `[DevForum] [${i + 1}/${uniqueTopics.length}] failed topic=${t.id} reason=${reason}`,
+            );
+          } finally {
+            inFlight--;
+            this.semaphore.release();
+            const done = added + lowScore + failed;
+            reporter.onStep(
+              done,
+              uniqueTopics.length,
+              `added=${added} low=${lowScore} failed=${failed}`,
+            );
+          }
+        }),
+      );
+    } finally {
+      clearInterval(heartbeat);
+    }
+
+    endPhase(
+      "fetch",
+      `added=${added} low=${lowScore} failed=${failed} · ${this.formatMix(sourceCounters)}`,
+    );
+
+    if (added > 0) {
+      startPhase("index", "invalidating DevForum BM25 cache");
+      await this.indexer.clear("devforum");
+      bm25Invalidated = true;
+      endPhase("index");
+    }
+
+    const existingState = await this.syncManager.getSourceState("devforum");
+    await this.syncManager.updateSourceState("devforum", {
+      lastSyncAt: Date.now(),
+      lastBumpedAt: new Date().toISOString(),
+      topicCount: uniqueTopics.length,
+      addedCount: added,
+      metadata: {
+        ...(existingState?.metadata ?? {}),
+        sourceMix: sourceCounters,
+      },
+    });
+
+    const rejected = uniqueTopics.length - added - lowScore - failed;
+    const elapsedMs = Date.now() - seedStartedAt;
+    logger.info(
+      `[DevForum] done in ${(elapsedMs / 1000).toFixed(1)}s. added=${added} lowScore=${lowScore} failed=${failed}. store=${added}. BM25 invalidated=${bm25Invalidated}. cache=${discoveryFromCache}. ${this.formatMix(sourceCounters)}`,
+    );
+
+    reporter.onFinish?.({
+      elapsedMs,
+      added,
+      lowScore,
+      failed,
+      rejected,
+      ...(discoveryFromCache ? { detail: "discovery from cache" } : {}),
+    });
+
+    return {
+      added,
+      lowScore,
+      failed,
+      rejected,
+      bm25Invalidated,
+      discoveryFromCache,
+    };
+  }
+
+  private async runDiscovery(
+    candidateTopics: Map<number, DiscoveryCandidate>,
+    goldCategoryMap: Map<string, number>,
+    activeQueries: readonly string[],
+    startPhase: (phase: string, detail?: string) => void,
+    reporter: SeedProgressReporter,
+  ): Promise<{ discoveryTotal: number; queryCount: number }> {
     const upsertCandidate = (cand: DiscoveryCandidate) => {
       const existing = candidateTopics.get(cand.topic.id);
       if (!existing || cand.weight > existing.weight) {
@@ -262,7 +496,7 @@ export class DevForumPipeline {
       reporter.onNote(msg);
     }
 
-    for (const query of EXPANDED_QUERIES) {
+    for (const query of activeQueries) {
       discoveryTasks.push(async () => {
         await this.discoverySemaphore.acquire();
         try {
@@ -281,9 +515,9 @@ export class DevForumPipeline {
 
     const discoveryTotal = discoveryTasks.length;
     let discoveryDone = 0;
-    reporter.onPhase(
+    startPhase(
       "discovery",
-      `${discoveryTotal} fetches (top lists, categories, ${EXPANDED_QUERIES.length} queries)`,
+      `${discoveryTotal} fetches (top, categories, ${activeQueries.length} queries)`,
     );
 
     await Promise.allSettled(
@@ -299,133 +533,14 @@ export class DevForumPipeline {
         .map((wrapped) => wrapped()),
     );
 
-    reporter.onPhase("rank", "scoring and capping topic candidates");
-
-    const uniqueTopics = Array.from(candidateTopics.values())
-      .map((c) => {
-        const t = c.topic;
-        const ageDays = t.created_at
-          ? Math.max(0, (Date.now() - new Date(t.created_at).getTime()) / 86_400_000)
-          : 0;
-        const recencyBoost = ageDays > 0 && ageDays < 365 ? 5 : 0;
-        const acceptedBoost = t.has_accepted_answer ? 15 : 0;
-        const scoreEstimate =
-          Math.min(t.views / 500, 30) +
-          Math.min(t.like_count * 2, 30) +
-          Math.min(t.reply_count ?? 0, 10) +
-          acceptedBoost +
-          recencyBoost;
-        return { ...c, scoreEstimate };
-      })
-      .sort((a, b) => b.weight * 1000 + b.scoreEstimate - (a.weight * 1000 + a.scoreEstimate))
-      .slice(0, CONFIG.maxTopicsTotal);
+    await saveDiscoveryCache(this.syncManager, mapToSerialized(candidateTopics));
 
     const goldCount = GOLD_CATEGORIES.filter((g) => goldCategoryMap.has(g.slug)).length;
     logger.info(
-      `[DevForum] discovery sources=top(${topPeriods.length})+cats(${goldCount}/${GOLD_CATEGORIES.length})+queries(${EXPANDED_QUERIES.length}) unique=${candidateTopics.size} after-prefilter=${uniqueTopics.length} capped=${CONFIG.maxTopicsTotal}`,
-    );
-    reporter.onNote(
-      `candidates: ${candidateTopics.size} unique → ${uniqueTopics.length} after rank (cap ${CONFIG.maxTopicsTotal})`,
+      `[DevForum] discovery sources=top(${topPeriods.length})+cats(${goldCount}/${GOLD_CATEGORIES.length})+queries(${activeQueries.length}) unique=${candidateTopics.size}`,
     );
 
-    reporter.onPhase("fetch", `downloading ${uniqueTopics.length} topic details`);
-    const batchStartedAt = Date.now();
-    const sourceCounters: SourceCounters = {
-      topMonthly: 0,
-      gold: 0,
-      high: 0,
-      medium: 0,
-      search: 0,
-    };
-
-    const heartbeat = setInterval(() => {
-      const elapsedMs = Date.now() - batchStartedAt;
-      const done = added + lowScore + failed;
-      const rate = done / Math.max(elapsedMs / 1000, 1);
-      const remaining = uniqueTopics.length - done;
-      const eta = rate > 0 ? `${Math.ceil(remaining / rate)}s` : "…";
-      reporter.onStep(
-        done,
-        uniqueTopics.length,
-        `added=${added} low=${lowScore} failed=${failed} in-flight=${inFlight}`,
-      );
-      logger.debug(
-        `[DevForum] heartbeat in-flight=${inFlight} done=${done}/${uniqueTopics.length} added=${added} lowScore=${lowScore} failed=${failed} elapsed=${Math.round(elapsedMs / 1000)}s rate=${rate.toFixed(2)} t/s eta=${eta} ${this.formatMix(sourceCounters)}`,
-      );
-    }, 3000);
-    heartbeat.unref();
-
-    try {
-      await Promise.allSettled(
-        uniqueTopics.map(async (cand, i) => {
-          const { topic: t, source, weight } = cand;
-          await this.semaphore.acquire();
-          inFlight++;
-          const startedAt = Date.now();
-          logger.debug(
-            `[DevForum] [${i + 1}/${uniqueTopics.length}] start topic=${t.id} source=${source}`,
-          );
-
-          try {
-            const detail = await this.fetchTopicWithRetry(t.id);
-            const record = processTopic(detail, weight);
-            record.source = source;
-            const elapsedMs = Date.now() - startedAt;
-
-            if (record.score < CONFIG.minScore) {
-              lowScore++;
-              logger.debug(
-                `[DevForum] [${i + 1}/${uniqueTopics.length}] done  topic=${t.id} score=${record.score} lowScore in ${(elapsedMs / 1000).toFixed(1)}s source=${source}`,
-              );
-            } else {
-              await this.store.put(`devforum:${record.id}`, record);
-              added++;
-              this.bumpCounters(sourceCounters, cand);
-              logger.debug(
-                `[DevForum] [${i + 1}/${uniqueTopics.length}] done  topic=${t.id} score=${record.score} added in ${(elapsedMs / 1000).toFixed(1)}s source=${source} "${record.title}"`,
-              );
-            }
-          } catch (e) {
-            failed++;
-            const reason = e instanceof Error ? e.message : String(e);
-            logger.warn(
-              `[DevForum] [${i + 1}/${uniqueTopics.length}] failed topic=${t.id} reason=${reason}`,
-            );
-          } finally {
-            inFlight--;
-            this.semaphore.release();
-          }
-        }),
-      );
-    } finally {
-      clearInterval(heartbeat);
-    }
-
-    if (added > 0) {
-      reporter.onPhase("index", "invalidating DevForum BM25 cache");
-      await this.indexer.clear("devforum");
-      bm25Invalidated = true;
-    }
-
-    await this.syncManager.updateSourceState("devforum", {
-      lastSyncAt: Date.now(),
-      lastBumpedAt: new Date().toISOString(),
-      topicCount: uniqueTopics.length,
-      addedCount: added,
-      metadata: { sourceMix: sourceCounters },
-    });
-
-    logger.info(
-      `[DevForum] done in ${((Date.now() - batchStartedAt) / 1000).toFixed(1)}s. added=${added} lowScore=${lowScore} failed=${failed}. store=${added}. BM25 invalidated=${bm25Invalidated}. ${this.formatMix(sourceCounters)}`,
-    );
-
-    return {
-      added,
-      lowScore,
-      failed,
-      rejected: uniqueTopics.length - added - lowScore - failed,
-      bm25Invalidated,
-    };
+    return { discoveryTotal, queryCount: activeQueries.length };
   }
 
   private async fetchTopicWithRetry(
