@@ -1,8 +1,11 @@
+import type { SeedProgressReporter } from "../seed/progress.js";
+import { noopSeedProgress, throttleStep } from "../seed/progress.js";
 import type { IKeyValueStore, Indexer, SyncStateManager } from "../store/index.js";
 import { logger } from "../utils/logger.js";
 import { Semaphore } from "../utils/semaphore.js";
 import { DevForumFetcher } from "./fetcher.js";
 import { shouldRejectTopic } from "./filters.js";
+import { DEVFORUM_HTTP_CONCURRENCY } from "./http.js";
 import { processTopic } from "./processor.js";
 import { EXPANDED_QUERIES, GOLD_CATEGORIES } from "./sources.js";
 import type { DevForumTopic } from "./types.js";
@@ -58,12 +61,12 @@ const CONFIG = Object.freeze({
   discoveryConcurrency: readIntEnv("RODOCS_DEVFORUM_DISCOVERY_CONCURRENCY", {
     min: 1,
     max: 16,
-    default: 4,
+    default: DEVFORUM_HTTP_CONCURRENCY,
   }),
   topicConcurrency: readIntEnv("RODOCS_DEVFORUM_TOPIC_CONCURRENCY", {
     min: 1,
     max: 16,
-    default: 3,
+    default: DEVFORUM_HTTP_CONCURRENCY,
   }),
   minScore: readIntEnv("RODOCS_DEVFORUM_MIN_SCORE", {
     min: 0,
@@ -110,7 +113,7 @@ const CATEGORY_WEIGHT_TO_NUM: Record<CategoryWeight, SourceWeight> = {
 };
 
 const TRANSIENT_RE =
-  /timeout|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|status code (?:408|425|429)|status code 5\d\d/i;
+  /timeout|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|status code (?:202|408|425|429)|status code 5\d\d|Invalid DevForum response|missing post_stream/i;
 
 function isTransientError(e: unknown): boolean {
   const msg = e instanceof Error ? e.message : String(e);
@@ -136,13 +139,14 @@ export class DevForumPipeline {
     this.discoverySemaphore = new Semaphore(CONFIG.discoveryConcurrency);
   }
 
-  async seed(): Promise<{
+  async seed(options?: { reporter?: SeedProgressReporter }): Promise<{
     added: number;
     lowScore: number;
     failed: number;
     rejected: number;
     bm25Invalidated: boolean;
   }> {
+    const reporter = throttleStep(options?.reporter ?? noopSeedProgress, 2000);
     let added = 0;
     let lowScore = 0;
     let failed = 0;
@@ -150,12 +154,13 @@ export class DevForumPipeline {
     let bm25Invalidated = false;
 
     logger.info("[DevForumPipeline] Starting seed process...");
+    reporter.onPhase("categories", "resolving DevForum category map");
 
     const categories = await this.fetcher.getCategories();
     const goldCategoryMap = new Map<string, number>();
     for (const cat of categories) {
       if (GOLD_CATEGORIES.some((gc) => gc.slug === cat.slug)) {
-        goldCategoryMap.set(cat.slug as string, cat.id as number);
+        goldCategoryMap.set(cat.slug, cat.id);
       }
     }
 
@@ -192,10 +197,11 @@ export class DevForumPipeline {
       });
     }
 
+    const unresolvedSlugs: string[] = [];
     for (const gc of GOLD_CATEGORIES) {
       const id = goldCategoryMap.get(gc.slug);
       if (!id) {
-        logger.warn(`[DevForum] category-skip slug=${gc.slug}`);
+        unresolvedSlugs.push(gc.slug);
         continue;
       }
       const numericWeight = CATEGORY_WEIGHT_TO_NUM[gc.weight];
@@ -248,6 +254,14 @@ export class DevForumPipeline {
       });
     }
 
+    if (unresolvedSlugs.length > 0) {
+      const msg = `unresolved categories: ${unresolvedSlugs.length}`;
+      logger.warn(
+        `[DevForum] categories-unresolved count=${unresolvedSlugs.length} slugs=${unresolvedSlugs.join(",")}`,
+      );
+      reporter.onNote(msg);
+    }
+
     for (const query of EXPANDED_QUERIES) {
       discoveryTasks.push(async () => {
         await this.discoverySemaphore.acquire();
@@ -265,7 +279,27 @@ export class DevForumPipeline {
       });
     }
 
-    await Promise.allSettled(discoveryTasks.map((t) => t()));
+    const discoveryTotal = discoveryTasks.length;
+    let discoveryDone = 0;
+    reporter.onPhase(
+      "discovery",
+      `${discoveryTotal} fetches (top lists, categories, ${EXPANDED_QUERIES.length} queries)`,
+    );
+
+    await Promise.allSettled(
+      discoveryTasks
+        .map((task) => async () => {
+          try {
+            await task();
+          } finally {
+            discoveryDone++;
+            reporter.onStep(discoveryDone, discoveryTotal, "discovery fetches");
+          }
+        })
+        .map((wrapped) => wrapped()),
+    );
+
+    reporter.onPhase("rank", "scoring and capping topic candidates");
 
     const uniqueTopics = Array.from(candidateTopics.values())
       .map((c) => {
@@ -290,7 +324,11 @@ export class DevForumPipeline {
     logger.info(
       `[DevForum] discovery sources=top(${topPeriods.length})+cats(${goldCount}/${GOLD_CATEGORIES.length})+queries(${EXPANDED_QUERIES.length}) unique=${candidateTopics.size} after-prefilter=${uniqueTopics.length} capped=${CONFIG.maxTopicsTotal}`,
     );
+    reporter.onNote(
+      `candidates: ${candidateTopics.size} unique → ${uniqueTopics.length} after rank (cap ${CONFIG.maxTopicsTotal})`,
+    );
 
+    reporter.onPhase("fetch", `downloading ${uniqueTopics.length} topic details`);
     const batchStartedAt = Date.now();
     const sourceCounters: SourceCounters = {
       topMonthly: 0,
@@ -306,6 +344,11 @@ export class DevForumPipeline {
       const rate = done / Math.max(elapsedMs / 1000, 1);
       const remaining = uniqueTopics.length - done;
       const eta = rate > 0 ? `${Math.ceil(remaining / rate)}s` : "…";
+      reporter.onStep(
+        done,
+        uniqueTopics.length,
+        `added=${added} low=${lowScore} failed=${failed} in-flight=${inFlight}`,
+      );
       logger.debug(
         `[DevForum] heartbeat in-flight=${inFlight} done=${done}/${uniqueTopics.length} added=${added} lowScore=${lowScore} failed=${failed} elapsed=${Math.round(elapsedMs / 1000)}s rate=${rate.toFixed(2)} t/s eta=${eta} ${this.formatMix(sourceCounters)}`,
       );
@@ -359,6 +402,7 @@ export class DevForumPipeline {
     }
 
     if (added > 0) {
+      reporter.onPhase("index", "invalidating DevForum BM25 cache");
       await this.indexer.clear("devforum");
       bm25Invalidated = true;
     }

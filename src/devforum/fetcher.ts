@@ -3,6 +3,33 @@ import type { DevForumTopic, DevForumTopicDetail } from "./types.js";
 
 const BASE_URL = "https://devforum.roblox.com";
 
+export interface DevForumCategory {
+  id: number;
+  slug: string;
+  name: string;
+}
+
+interface DiscourseCategory {
+  id: number;
+  slug: string;
+  name: string;
+  subcategory_list?: DiscourseCategory[];
+}
+
+function flattenCategories(categories: DiscourseCategory[]): DevForumCategory[] {
+  const result: DevForumCategory[] = [];
+  const walk = (category: DiscourseCategory): void => {
+    result.push({ id: category.id, slug: category.slug, name: category.name });
+    for (const sub of category.subcategory_list ?? []) {
+      walk(sub);
+    }
+  };
+  for (const category of categories) {
+    walk(category);
+  }
+  return result;
+}
+
 interface DiscoursePost {
   id: number;
   username: string;
@@ -55,6 +82,40 @@ const TOP_PATHS: Record<TopPeriod, string> = {
   all: "/top/all.json",
 };
 
+function mapTopicDetail(t: DiscourseTopicDetail, requestedId: number): DevForumTopicDetail {
+  const posts = t.post_stream?.posts;
+  if (!Array.isArray(posts) || posts.length === 0) {
+    throw new Error(`Topic ${requestedId} response missing post_stream.posts`);
+  }
+
+  return {
+    id: t.id,
+    title: t.title,
+    slug: t.slug,
+    posts_count: t.posts_count,
+    reply_count: t.reply_count,
+    views: t.views,
+    like_count: t.like_count,
+    has_accepted_answer: t.has_accepted_answer ?? false,
+    created_at: t.created_at,
+    closed: t.closed ?? false,
+    category_id: t.category_id,
+    tags: t.tags,
+    accepted_answer_post_number: t.accepted_answer_post_number,
+    post_stream: {
+      posts: posts.map((p) => ({
+        id: p.id,
+        username: p.username,
+        cooked: p.cooked,
+        post_number: p.post_number,
+        created_at: p.created_at,
+        staff: !!p.staff || p.trust_level >= 4,
+        trust_level: p.trust_level,
+      })),
+    },
+  };
+}
+
 export class DevForumFetcher {
   async search(query: string): Promise<DevForumTopic[]> {
     const response = await devForumClient.get(
@@ -63,9 +124,12 @@ export class DevForumFetcher {
     return this.mapTopics(response.data.topics ?? []);
   }
 
-  async getCategories(): Promise<Record<string, unknown>[]> {
-    const response = await devForumClient.get(`${BASE_URL}/categories.json`);
-    return response.data.category_list.categories as Record<string, unknown>[];
+  async getCategories(): Promise<DevForumCategory[]> {
+    const response = await devForumClient.get(
+      `${BASE_URL}/categories.json?include_subcategories=true`,
+    );
+    const categories = response.data.category_list.categories as DiscourseCategory[];
+    return flattenCategories(categories);
   }
 
   async getCategoryLatest(slug: string, id: number): Promise<DevForumTopic[]> {
@@ -98,34 +162,7 @@ export class DevForumFetcher {
 
   async getTopicDetail(id: number): Promise<DevForumTopicDetail> {
     const response = await devForumClient.get(`${BASE_URL}/t/${id}.json`);
-    const t = response.data as DiscourseTopicDetail;
-
-    return {
-      id: t.id,
-      title: t.title,
-      slug: t.slug,
-      posts_count: t.posts_count,
-      reply_count: t.reply_count,
-      views: t.views,
-      like_count: t.like_count,
-      has_accepted_answer: t.has_accepted_answer ?? false,
-      created_at: t.created_at,
-      closed: t.closed ?? false,
-      category_id: t.category_id,
-      tags: t.tags,
-      accepted_answer_post_number: t.accepted_answer_post_number,
-      post_stream: {
-        posts: t.post_stream.posts.map((p) => ({
-          id: p.id,
-          username: p.username,
-          cooked: p.cooked,
-          post_number: p.post_number,
-          created_at: p.created_at,
-          staff: !!p.staff || p.trust_level >= 4,
-          trust_level: p.trust_level,
-        })),
-      },
-    };
+    return mapTopicDetail(response.data as DiscourseTopicDetail, id);
   }
 
   private async fetchTop(period: TopPeriod): Promise<DevForumTopic[]> {

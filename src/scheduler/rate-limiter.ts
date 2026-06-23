@@ -41,7 +41,7 @@ export class RateLimiter {
   }
 
   reportError(status: number) {
-    if ([429, 502, 503, 504].includes(status)) {
+    if ([202, 429, 502, 503, 504].includes(status)) {
       this.retryCount++;
       const backoffMs = 2 ** this.retryCount * 1000 + Math.random() * 1000;
       this.backoffUntil = Date.now() + backoffMs;

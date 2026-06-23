@@ -49,6 +49,7 @@ export interface DevForumSearchOptions {
 }
 
 export interface DevForumSearchResult {
+  id: number;
   title: string;
   url: string;
   tags: string[];
@@ -137,6 +138,7 @@ function project(record: DevForumRecord): DevForumSearchResult {
   const timestamp = new Date(record.lastSyncAt).toISOString();
 
   return {
+    id: record.id,
     title: record.title,
     url: record.url,
     tags: record.tags,

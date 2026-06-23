@@ -6,8 +6,7 @@ export const GOLD_CATEGORIES: ReadonlyArray<{
   { slug: "announcements", weight: "gold" },
   { slug: "updates", weight: "gold" },
   { slug: "release-notes", weight: "gold" },
-  { slug: "roblox-engineers", weight: "gold" },
-  { slug: "public-roadmap", weight: "gold" },
+  { slug: "roblox-staff", weight: "gold" },
   { slug: "engine-features", weight: "gold" },
   { slug: "studio-features", weight: "gold" },
 
@@ -15,20 +14,17 @@ export const GOLD_CATEGORIES: ReadonlyArray<{
   { slug: "resources", weight: "high" },
   { slug: "community-resources", weight: "high" },
   { slug: "community-tutorials", weight: "high" },
-  { slug: "developer-discussion", weight: "high" },
-  { slug: "cool-creations", weight: "high" },
+  { slug: "creations-feedback", weight: "high" },
 
   // Tech support / Q&A (where solutions live)
   { slug: "scripting-support", weight: "medium" },
   { slug: "code-review", weight: "medium" },
   { slug: "help-and-feedback", weight: "medium" },
-  { slug: "technical-base", weight: "medium" },
   { slug: "platform-usage-support", weight: "medium" },
 
   // Bug reports (often have engineer replies with engine internals)
   { slug: "studio-bugs", weight: "medium" },
   { slug: "engine-bugs", weight: "medium" },
-  { slug: "client-bugs", weight: "medium" },
   { slug: "mobile-bugs", weight: "medium" },
   { slug: "website-bugs", weight: "medium" },
   { slug: "bug-reports", weight: "medium" },
@@ -37,9 +33,6 @@ export const GOLD_CATEGORIES: ReadonlyArray<{
   { slug: "art-design-support", weight: "medium" },
   { slug: "building-support", weight: "medium" },
   { slug: "game-design-support", weight: "medium" },
-  { slug: "ui-design-support", weight: "medium" },
-  { slug: "audio-design-support", weight: "medium" },
-  { slug: "animation-support", weight: "medium" },
 ];
 
 export const EXPANDED_QUERIES = [

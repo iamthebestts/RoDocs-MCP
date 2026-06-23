@@ -31,6 +31,14 @@ describe("DevForum Fetcher", () => {
     expect(devForumClient.get).toHaveBeenCalledWith(expect.stringContaining("search.json?q=query"));
   });
 
+  it("should reject topic detail responses without post_stream", async () => {
+    vi.mocked(devForumClient.get).mockResolvedValue({
+      data: { id: 9, title: "Empty", slug: "empty" },
+    });
+
+    await expect(fetcher.getTopicDetail(9)).rejects.toThrow(/missing post_stream\.posts/);
+  });
+
   it("should fetch topic detail", async () => {
     const mockData = {
       id: 1,
@@ -55,17 +63,36 @@ describe("DevForum Fetcher", () => {
     expect(detail.post_stream.posts).toHaveLength(1);
   });
 
-  it("should fetch categories", async () => {
+  it("should fetch categories including nested subcategories", async () => {
     const mockData = {
       category_list: {
-        categories: [{ id: 1, name: "Cat 1", slug: "cat-1" }],
+        categories: [
+          {
+            id: 45,
+            name: "Updates",
+            slug: "updates",
+            subcategory_list: [
+              { id: 36, name: "Announcements", slug: "announcements" },
+              { id: 193, name: "Release Notes", slug: "release-notes" },
+            ],
+          },
+          { id: 71, name: "Resources", slug: "resources" },
+        ],
       },
     };
     vi.mocked(devForumClient.get).mockResolvedValue({ data: mockData });
 
     const cats = await fetcher.getCategories();
-    expect(cats).toHaveLength(1);
-    expect(cats[0]?.name).toBe("Cat 1");
+    expect(devForumClient.get).toHaveBeenCalledWith(
+      expect.stringContaining("categories.json?include_subcategories=true"),
+    );
+    expect(cats).toHaveLength(4);
+    expect(cats.map((c) => c.slug)).toEqual([
+      "updates",
+      "announcements",
+      "release-notes",
+      "resources",
+    ]);
   });
 
   it("should fetch category latest topics", async () => {
