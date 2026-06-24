@@ -1,36 +1,12 @@
-import http from "node:http";
-import https from "node:https";
-import type { Socket } from "node:net";
 import axios from "axios";
 import { RateLimiter } from "../scheduler/rate-limiter.js";
+import { createKeepAliveAgents } from "../utils/axios-agents.js";
 
 /** Shared cap for keep-alive sockets and DevForum concurrency defaults. */
 export const DEVFORUM_HTTP_CONCURRENCY = 3;
 const REQUEST_TIMEOUT_MS = 15000;
 
-function bumpSocketMaxListeners(socket: Socket): void {
-  // axios + follow-redirects accumulate per-request error handlers on keep-alive sockets
-  socket.setMaxListeners(0);
-}
-
-const httpsAgent = new https.Agent({
-  keepAlive: true,
-  maxSockets: DEVFORUM_HTTP_CONCURRENCY,
-  maxFreeSockets: DEVFORUM_HTTP_CONCURRENCY,
-  scheduling: "lifo",
-});
-
-httpsAgent.on("free", bumpSocketMaxListeners);
-httpsAgent.on("socket", bumpSocketMaxListeners);
-
-const httpAgent = new http.Agent({
-  keepAlive: true,
-  maxSockets: DEVFORUM_HTTP_CONCURRENCY,
-  maxFreeSockets: DEVFORUM_HTTP_CONCURRENCY,
-});
-
-httpAgent.on("free", bumpSocketMaxListeners);
-httpAgent.on("socket", bumpSocketMaxListeners);
+const { httpAgent, httpsAgent } = createKeepAliveAgents(DEVFORUM_HTTP_CONCURRENCY);
 
 export const devForumClient = axios.create({
   timeout: REQUEST_TIMEOUT_MS,

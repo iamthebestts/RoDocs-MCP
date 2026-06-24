@@ -16,14 +16,9 @@ import { findClosestApiName, scrapeIndex, scrapeTopic } from "../scraper/index.j
 import { createServer } from "../server/index.js";
 import { parseGithubTokenArgs } from "../utils/github-token.js";
 import { _setMetricsSink } from "../utils/logger.js";
+import { runSeedAllCommand, runSeedCommand } from "./seed-command.js";
 import { createCliSeedProgressReporter } from "./seed-progress.js";
-import {
-  openSeedContext,
-  seedDevforum,
-  seedDocs,
-  seedFastflags,
-  seedGuides,
-} from "./seed-runner.js";
+import { seedDevforum, seedDocs, seedFastflags, seedGuides } from "./seed-runner.js";
 import { runSetup } from "./setup.js";
 
 const W = 76;
@@ -56,6 +51,20 @@ function bold(text: string): string {
 
 function dim(text: string): string {
   return `${C.dim}${text}${C.reset}`;
+}
+
+function createSeedIo() {
+  return {
+    writeStdout: (line: string) => {
+      process.stdout.write(line);
+    },
+    writeStderr: (line: string) => {
+      process.stderr.write(`${c("red", "✖")} ${line}`);
+    },
+    exit: (code: number) => {
+      process.exit(code);
+    },
+  };
 }
 
 function boxTop(label: string, color: keyof typeof C = "cyan"): string {
@@ -610,122 +619,86 @@ export async function main(
   }
 
   if (first === "--seed-docs") {
-    const progress = createCliSeedProgressReporter("docs");
-    try {
-      progress.onPhase("store", "opening local cache");
-      const { store, syncManager } = await openSeedContext();
-      await seedDocs(store, syncManager, githubToken, progress);
-      progress.onPhase("done", "API index ready");
-      process.stdout.write(`${c("green", "✔")} Successfully seeded API docs index.\n`);
-      await store.close();
-    } catch (err: unknown) {
-      process.stderr.write(
-        `${c("red", "✖")} Failed to seed docs: ${err instanceof Error ? err.message : String(err)}\n`,
-      );
-      process.exit(1);
-    }
+    await runSeedCommand({
+      source: "docs",
+      failureLabel: "docs",
+      githubToken,
+      io: createSeedIo(),
+      createProgress: createCliSeedProgressReporter,
+      run: async (ctx, progress, token) => {
+        await seedDocs(ctx.store, ctx.syncManager, token, progress);
+        progress.onPhase("done", "API index ready");
+      },
+      formatSuccess: () => `${c("green", "✔")} Successfully seeded API docs index.\n`,
+    });
     return;
   }
 
   if (first === "--seed-guides") {
-    const progress = createCliSeedProgressReporter("guides");
-    try {
-      progress.onPhase("store", "opening local cache");
-      const { store, syncManager } = await openSeedContext();
-      await seedGuides(store, syncManager, githubToken, progress);
-      progress.onPhase("done", "guides index ready");
-      process.stdout.write(`${c("green", "✔")} Successfully seeded guides index.\n`);
-      await store.close();
-    } catch (err: unknown) {
-      process.stderr.write(
-        `${c("red", "✖")} Failed to seed guides: ${err instanceof Error ? err.message : String(err)}\n`,
-      );
-      process.exit(1);
-    }
+    await runSeedCommand({
+      source: "guides",
+      failureLabel: "guides",
+      githubToken,
+      io: createSeedIo(),
+      createProgress: createCliSeedProgressReporter,
+      run: async (ctx, progress, token) => {
+        await seedGuides(ctx.store, ctx.syncManager, token, progress);
+        progress.onPhase("done", "guides index ready");
+      },
+      formatSuccess: () => `${c("green", "✔")} Successfully seeded guides index.\n`,
+    });
     return;
   }
 
   if (first === "--seed-fastflags") {
-    const progress = createCliSeedProgressReporter("fastflags");
-    try {
-      progress.onPhase("store", "opening local cache");
-      const { store, syncManager, indexer } = await openSeedContext();
-      const { added, updated } = await seedFastflags(
-        store,
-        syncManager,
-        indexer,
-        githubToken,
-        progress,
-      );
-      progress.onPhase("done", `${added} added, ${updated} updated`);
-      process.stdout.write(
-        `${c("green", "✔")} Successfully seeded FastFlags: ${bold(String(added))} added, ${bold(String(updated))} updated.\n`,
-      );
-      await store.close();
-    } catch (err: unknown) {
-      process.stderr.write(
-        `${c("red", "✖")} Failed to seed FastFlags: ${err instanceof Error ? err.message : String(err)}\n`,
-      );
-      process.exit(1);
-    }
+    let flagsResult = { added: 0, updated: 0 };
+    await runSeedCommand({
+      source: "fastflags",
+      failureLabel: "FastFlags",
+      githubToken,
+      io: createSeedIo(),
+      createProgress: createCliSeedProgressReporter,
+      run: async (ctx, progress, token) => {
+        flagsResult = await seedFastflags(ctx.store, ctx.syncManager, ctx.indexer, token, progress);
+        progress.onPhase("done", `${flagsResult.added} added, ${flagsResult.updated} updated`);
+      },
+      formatSuccess: () =>
+        `${c("green", "✔")} Successfully seeded FastFlags: ${bold(String(flagsResult.added))} added, ${bold(String(flagsResult.updated))} updated.\n`,
+    });
     return;
   }
 
   if (first === "--seed-devforum") {
-    const progress = createCliSeedProgressReporter("devforum");
-    try {
-      progress.onPhase("store", "opening local cache");
-      const { store, syncManager, indexer } = await openSeedContext();
-      const { added, lowScore, failed, rejected, bm25Invalidated, discoveryFromCache } =
-        await seedDevforum(store, syncManager, indexer, progress);
-      process.stdout.write(
-        `${c("green", "✔")} Successfully seeded DevForum content: ${bold(String(added))} added, ${bold(String(rejected))} filtered, ${bold(String(lowScore))} low score, ${bold(String(failed))} failed. BM25 invalidated: ${String(bm25Invalidated)}. Discovery cache: ${discoveryFromCache ? "hit" : "miss"}.\n`,
-      );
-      await store.close();
-    } catch (err: unknown) {
-      process.stderr.write(
-        `${c("red", "✖")} Failed to seed DevForum: ${err instanceof Error ? err.message : String(err)}\n`,
-      );
-      process.exit(1);
-    }
+    let devforumResult = {
+      added: 0,
+      lowScore: 0,
+      failed: 0,
+      rejected: 0,
+      bm25Invalidated: false,
+      discoveryFromCache: false,
+    };
+    await runSeedCommand({
+      source: "devforum",
+      failureLabel: "DevForum",
+      githubToken,
+      io: createSeedIo(),
+      createProgress: createCliSeedProgressReporter,
+      run: async (ctx, progress) => {
+        devforumResult = await seedDevforum(ctx.store, ctx.syncManager, ctx.indexer, progress);
+      },
+      formatSuccess: () =>
+        `${c("green", "✔")} Successfully seeded DevForum content: ${bold(String(devforumResult.added))} added, ${bold(String(devforumResult.rejected))} filtered, ${bold(String(devforumResult.lowScore))} low score, ${bold(String(devforumResult.failed))} failed. BM25 invalidated: ${String(devforumResult.bm25Invalidated)}. Discovery cache: ${devforumResult.discoveryFromCache ? "hit" : "miss"}.\n`,
+    });
     return;
   }
 
   if (first === "--seed-all") {
-    try {
-      const allProgress = createCliSeedProgressReporter("all");
-      allProgress.onPhase("store", "opening local cache");
-      const { store, syncManager, indexer } = await openSeedContext();
-
-      const docsProgress = createCliSeedProgressReporter("docs");
-      await seedDocs(store, syncManager, githubToken, docsProgress);
-      docsProgress.onPhase("done", "complete");
-
-      const guidesProgress = createCliSeedProgressReporter("guides");
-      await seedGuides(store, syncManager, githubToken, guidesProgress);
-      guidesProgress.onPhase("done", "complete");
-
-      const flagsProgress = createCliSeedProgressReporter("fastflags");
-      const { added: flagsAdded, updated: flagsUpdated } = await seedFastflags(
-        store,
-        syncManager,
-        indexer,
-        githubToken,
-        flagsProgress,
-      );
-      flagsProgress.onPhase("done", `${flagsAdded} added, ${flagsUpdated} updated`);
-
-      const devforumProgress = createCliSeedProgressReporter("devforum");
-      await seedDevforum(store, syncManager, indexer, devforumProgress);
-
-      process.stdout.write(`${c("green", "✔")} Successfully completed all seeds.\n`);
-      await store.close();
-    } catch (err: unknown) {
-      process.stderr.write(
-        `${c("red", "✖")} Failed during --seed-all: ${err instanceof Error ? err.message : String(err)}\n`,
-      );
-      process.exit(1);
-    }
+    await runSeedAllCommand({
+      githubToken,
+      io: createSeedIo(),
+      createProgress: createCliSeedProgressReporter,
+      formatSuccess: () => `${c("green", "✔")} Successfully completed all seeds.\n`,
+    });
     return;
   }
 

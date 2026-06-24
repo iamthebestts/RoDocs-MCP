@@ -66,12 +66,13 @@ export async function saveDiscoveryCache(
 
 export function candidatesToMap(
   candidates: SerializedDiscoveryCandidate[],
-): Map<number, SerializedDiscoveryCandidate & { topic: DevForumTopic }> {
+): Map<number, SerializedDiscoveryCandidate> {
   const map = new Map<number, SerializedDiscoveryCandidate>();
   for (const cand of candidates) {
+    if (typeof cand.topic.id !== "number" || Number.isNaN(cand.topic.id)) continue;
     map.set(cand.topic.id, cand);
   }
-  return map as Map<number, SerializedDiscoveryCandidate & { topic: DevForumTopic }>;
+  return map;
 }
 
 export function mapToSerialized(
