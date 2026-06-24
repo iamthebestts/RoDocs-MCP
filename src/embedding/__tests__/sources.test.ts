@@ -3,8 +3,8 @@ import { buildDocsEmbedDocs, buildGuidesEmbedDocs } from "../sources.js";
 
 vi.mock("../../scraper/fetch.js", () => ({
   fetchIndex: vi.fn(async () => ({
-    classes: ["Actor"],
-    datatypes: ["Vector3"],
+    classes: ["Actor", "Color3"],
+    datatypes: ["Vector3", "Color3"],
     enums: ["Material"],
     globals: ["task"],
     libraries: ["buffer"],
@@ -29,8 +29,15 @@ describe("embedding sources", () => {
 
   it("buildDocsEmbedDocs() maps API names to EmbedDoc entries", async () => {
     const docs = await buildDocsEmbedDocs();
-    expect(docs).toHaveLength(5);
+    expect(docs).toHaveLength(6);
     expect(docs[0]).toEqual({ id: "Actor", source: "docs", text: "Actor" });
+  });
+
+  it("buildDocsEmbedDocs() deduplicates names that appear in multiple index groups", async () => {
+    const docs = await buildDocsEmbedDocs();
+    const ids = docs.map((doc) => doc.id);
+    expect(ids.filter((id) => id === "Color3")).toHaveLength(1);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
   it("buildGuidesEmbedDocs() combines title and description", async () => {

@@ -162,7 +162,7 @@ export class SeedManager {
   startBackground(): void {
     if (this.running || this.scheduled) return;
     this.startedAt = Date.now();
-    this.logger.error("[Seed] startup: store empty, scheduling background seed");
+    this.logger.error("[Seed] startup: scheduling background seed");
     this.scheduleNext();
   }
 

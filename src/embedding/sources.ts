@@ -4,6 +4,17 @@ import { fetchGuideIndex } from "../scraper/guides.js";
 import type { IKeyValueStore } from "../store/store-interface.js";
 import type { EmbedDoc } from "../types/index.js";
 
+export function dedupeEmbedDocs(docs: EmbedDoc[]): EmbedDoc[] {
+  const seen = new Set<string>();
+  const unique: EmbedDoc[] = [];
+  for (const doc of docs) {
+    if (seen.has(doc.id)) continue;
+    seen.add(doc.id);
+    unique.push(doc);
+  }
+  return unique;
+}
+
 export async function buildDocsEmbedDocs(githubToken?: string): Promise<EmbedDoc[]> {
   const {
     classes,
@@ -13,11 +24,13 @@ export async function buildDocsEmbedDocs(githubToken?: string): Promise<EmbedDoc
     libraries = [],
   } = await fetchIndex(githubToken);
   const names = [...classes, ...datatypes, ...enums, ...globals, ...libraries];
-  return names.map((name) => ({
-    id: name,
-    source: "docs",
-    text: name,
-  }));
+  return dedupeEmbedDocs(
+    names.map((name) => ({
+      id: name,
+      source: "docs",
+      text: name,
+    })),
+  );
 }
 
 export async function buildGuidesEmbedDocs(githubToken?: string): Promise<EmbedDoc[]> {

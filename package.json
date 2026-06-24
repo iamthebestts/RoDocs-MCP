@@ -99,6 +99,7 @@
       "better-sqlite3",
       "esbuild",
       "msgpackr-extract",
+      "sharp",
       "sqlite-vec"
     ]
   }

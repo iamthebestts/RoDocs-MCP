@@ -66,6 +66,21 @@ vi.mock("../../embedding/embedder.js", () => ({
   embed: vi.fn(),
 }));
 
+vi.mock("../index.js", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("../index.js")>();
+  return {
+    ...mod,
+    searchApis: vi
+      .fn()
+      .mockResolvedValue([{ type: "class", name: "TweenService", path: "TweenService", score: 1 }]),
+    searchGuides: vi.fn().mockResolvedValue([]),
+  };
+});
+
+vi.mock("../../devforum/search.js", () => ({
+  searchDevForumStore: vi.fn().mockResolvedValue({ results: [] }),
+}));
+
 import { embed } from "../../embedding/embedder.js";
 import type { IKeyValueStore } from "../../store/store-interface.js";
 import { hybridSearch } from "../hybrid.js";

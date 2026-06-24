@@ -89,4 +89,33 @@ describe("EmbeddingIndexer", () => {
     await indexer.indexSource("docs", []);
     expect(mockEmbed).not.toHaveBeenCalled();
   });
+
+  it("indexSource() deduplicates docs with the same id before inserting", async () => {
+    const docs: EmbedDoc[] = [
+      { id: "Color3", source: "docs", text: "Color3 datatype" },
+      { id: "Color3", source: "docs", text: "Color3 class" },
+    ];
+    mockEmbed.mockResolvedValue([new Float32Array(384).fill(0.1)]);
+
+    await indexer.indexSource("docs", docs);
+
+    const rows = db.prepare("SELECT id FROM vec_items").all() as { id: string }[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.id).toBe("Color3");
+    expect(mockEmbed).toHaveBeenCalledWith(["Color3 datatype"]);
+  });
+
+  it("indexSource() replaces existing rows for the same source", async () => {
+    const first: EmbedDoc[] = [{ id: "Actor", source: "docs", text: "Actor v1" }];
+    const second: EmbedDoc[] = [{ id: "Actor", source: "docs", text: "Actor v2" }];
+    mockEmbed
+      .mockResolvedValueOnce([new Float32Array(384).fill(0.1)])
+      .mockResolvedValueOnce([new Float32Array(384).fill(0.2)]);
+
+    await indexer.indexSource("docs", first);
+    await indexer.indexSource("docs", second);
+
+    const rows = db.prepare("SELECT id FROM vec_items WHERE source = 'docs'").all();
+    expect(rows).toHaveLength(1);
+  });
 });

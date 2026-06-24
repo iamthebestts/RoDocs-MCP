@@ -43,6 +43,23 @@ describe("embed()", () => {
     expect(mockLoadModel).not.toHaveBeenCalled();
   });
 
+  it("batches multiple texts into a single model call", async () => {
+    const model = vi.fn().mockResolvedValue({
+      data: new Float32Array([1, 0, 0, 0, 1, 0]),
+      dims: [2, 3],
+      normalize: () => ({
+        data: new Float32Array([1, 0, 0, 0, 1, 0]),
+        dims: [2, 3],
+      }),
+    });
+    mockLoadModel.mockResolvedValue(model as unknown as Awaited<ReturnType<typeof loadModel>>);
+
+    const results = await embed(["alpha", "beta"]);
+    expect(results).toHaveLength(2);
+    expect(model).toHaveBeenCalledTimes(1);
+    expect(model).toHaveBeenCalledWith(["alpha", "beta"], { pooling: "mean" });
+  });
+
   it("L2-normalizes the output vectors", async () => {
     const rawData = new Float32Array([3, 4]);
     const fakeOutput = {

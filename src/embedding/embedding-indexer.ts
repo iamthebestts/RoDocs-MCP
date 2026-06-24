@@ -3,6 +3,7 @@ import type { IKeyValueStore } from "../store/store-interface.js";
 import type { EmbedDoc } from "../types/index.js";
 import { observe } from "../utils/logger.js";
 import { embed } from "./embedder.js";
+import { dedupeEmbedDocs } from "./sources.js";
 
 export class EmbeddingIndexer {
   constructor(
@@ -11,9 +12,12 @@ export class EmbeddingIndexer {
   ) {}
 
   async indexSource(source: string, docs: EmbedDoc[]): Promise<void> {
-    if (docs.length === 0) return;
+    const uniqueDocs = dedupeEmbedDocs(docs);
+    if (uniqueDocs.length === 0) return;
 
-    const texts = docs.map((d) => d.text);
+    await this.clearSource(source);
+
+    const texts = uniqueDocs.map((d) => d.text);
     const vectors = await embed(texts);
 
     const upsert = this.db.prepare(
@@ -28,14 +32,14 @@ export class EmbeddingIndexer {
       },
     );
 
-    const entries = docs.map((doc, i) => ({
+    const entries = uniqueDocs.map((doc, i) => ({
       id: doc.id,
       source: doc.source,
       vec: vectors[i] ?? new Float32Array(384),
     }));
 
     insertMany(entries);
-    observe({ event: "embedding.indexed", source, metadata: { count: docs.length } });
+    observe({ event: "embedding.indexed", source, metadata: { count: uniqueDocs.length } });
   }
 
   async clearSource(source: string): Promise<void> {

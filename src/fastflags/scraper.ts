@@ -1,6 +1,7 @@
 import axios from "axios";
 import type { IKeyValueStore, SyncStateManager } from "../store/index.js";
 import type { Indexer } from "../store/indexer.js";
+import { createKeepAliveAgents } from "../utils/axios-agents.js";
 import { buildGithubHeaders } from "../utils/github-token.js";
 import { logger } from "../utils/logger.js";
 import { enrichFastFlag } from "./enricher.js";
@@ -14,6 +15,13 @@ type GitHubContentItem = {
   sha?: string;
   size?: number;
 };
+
+const githubAgents = createKeepAliveAgents(8);
+const githubRequestConfig = {
+  httpAgent: githubAgents.httpAgent,
+  httpsAgent: githubAgents.httpsAgent,
+  timeout: 30_000,
+} as const;
 
 /**
  * Scraper for Roblox FastFlags from MaximumADHD sources.
@@ -33,7 +41,10 @@ export class FastFlagScraper {
     logger.debug(`Fetching flags from ${baseUrl}...`);
 
     const headers = buildGithubHeaders({}, githubToken);
-    const response = await axios.get<GitHubContentItem[]>(baseUrl, { headers });
+    const response = await axios.get<GitHubContentItem[]>(baseUrl, {
+      headers,
+      ...githubRequestConfig,
+    });
     const items = response.data;
 
     let added = 0;
@@ -52,7 +63,7 @@ export class FastFlagScraper {
       }
 
       logger.debug(`Downloading ${item.name}...`);
-      const fileResponse = await axios.get(item.download_url);
+      const fileResponse = await axios.get(item.download_url, githubRequestConfig);
       const rawFlags = this.ensureArray(fileResponse.data);
 
       const platforms = this.inferPlatforms(item.name);
