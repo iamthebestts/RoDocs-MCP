@@ -3,28 +3,16 @@ import { z } from "zod";
 import { setupRateLimiter } from "../devforum/http.js";
 import { DevForumPipeline } from "../devforum/pipeline.js";
 import { initDevForumSearch, searchDevForumStore } from "../devforum/search.js";
-import { EmbeddingIndexer } from "../embedding/embedding-indexer.js";
-import {
-  buildDevforumEmbedDocs,
-  buildDocsEmbedDocs,
-  buildFastflagsEmbedDocs,
-  buildGuidesEmbedDocs,
-} from "../embedding/sources.js";
 import { FastFlagScraper } from "../fastflags/scraper.js";
 import { FastFlagSearch } from "../fastflags/search.js";
 import { Scheduler } from "../scheduler/index.js";
-import { SeedManager, type SeedSource } from "../scheduler/seed-manager.js";
+import type { SeedManager, SeedSource } from "../scheduler/seed-manager.js";
 import type { ApiKind, CodeSample, RichMember, RobloxDocEntry } from "../scraper/fetch.js";
 import { fetchGuide, fetchGuideIndex } from "../scraper/guides.js";
 import { scrapeIndex, scrapeMany, scrapeTopic } from "../scraper/index.js";
-import {
-  ensureApiIndex,
-  ensureGuideIndex,
-  initIndexer,
-  search,
-  searchGuides,
-} from "../search/index.js";
+import { initIndexer, search, searchGuides } from "../search/index.js";
 import { ROBLOX_SEARCH_SOURCES, robloxSearch } from "../search/roblox-search.js";
+import { createEmbeddingIndexer } from "../seed/runners.js";
 import {
   createSyncStateManager,
   type IKeyValueStore,
@@ -34,6 +22,7 @@ import {
 } from "../store/index.js";
 import { parseGithubTokenArgs, resolveGithubToken } from "../utils/github-token.js";
 import { logger } from "../utils/logger.js";
+import { createSeedManager } from "./seed-wiring.js";
 
 // ! AI projection types
 
@@ -237,14 +226,8 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
   initIndexer(store, syncManager, sharedIndexer);
   initDevForumSearch(sharedIndexer);
 
-  let embeddingIndexer: EmbeddingIndexer | null = null;
-  if (typeof (store as unknown as Record<string, unknown>)["getDb"] === "function") {
-    try {
-      const db = (store as unknown as { getDb(): import("better-sqlite3").Database }).getDb();
-      embeddingIndexer = new EmbeddingIndexer(store, db);
-    } catch {
-      logger.warn("[Server] EmbeddingIndexer could not be initialized; hybrid search disabled");
-    }
+  if (createEmbeddingIndexer(store) === null) {
+    logger.warn("[Server] EmbeddingIndexer could not be initialized; hybrid search disabled");
   }
 
   const ffSearch = new FastFlagSearch(store, sharedIndexer);
@@ -257,94 +240,20 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
     version: "2.0.0",
   });
 
-  const fastFlagScraper = new FastFlagScraper(store, syncManager, sharedIndexer);
-  const devForumPipeline = new DevForumPipeline(store, syncManager, sharedIndexer);
-  const seedManager = new SeedManager({
+  const seedManager = createSeedManager({
+    store,
     syncManager,
-    idleDetector: scheduler.idleDetector,
-    rateLimiters: {
-      devforum: scheduler.devForumRateLimiter,
-    },
-    runners: [
-      {
-        source: "docs",
-        estimatedTotal: 350,
-        batchSize: 50,
-        runBatch: async () => {
-          // Await the build so the source is only marked complete once the API
-          // index is queryable; a failure propagates and keeps it retryable.
-          // Safe to await here: seed runs off the initialize handshake path.
-          await ensureApiIndex(githubToken);
-          return { processed: 50, done: true, logDetail: "50 paths" };
-        },
-        ...(embeddingIndexer
-          ? {
-              buildEmbeddings: async () => {
-                const docs = await buildDocsEmbedDocs(githubToken);
-                await embeddingIndexer.indexSource("docs", docs);
-              },
-            }
-          : {}),
-      },
-      {
-        source: "guides",
-        estimatedTotal: 350,
-        batchSize: 50,
-        runBatch: async () => {
-          await ensureGuideIndex(githubToken);
-          return { processed: 50, done: true, logDetail: "50 paths" };
-        },
-        ...(embeddingIndexer
-          ? {
-              buildEmbeddings: async () => {
-                const docs = await buildGuidesEmbedDocs(githubToken);
-                await embeddingIndexer.indexSource("guides", docs);
-              },
-            }
-          : {}),
-      },
-      {
-        source: "fastflags" as const,
-        estimatedTotal: 12,
-        batchSize: 3,
-        runBatch: async () => {
-          await fastFlagScraper.seed(githubToken);
-          return { processed: 3, done: true, needsRebuild: true, logDetail: "3 targets" };
-        },
-        ...(embeddingIndexer
-          ? {
-              buildEmbeddings: async () => {
-                const docs = await buildFastflagsEmbedDocs(store);
-                await embeddingIndexer.indexSource("fastflags", docs);
-              },
-            }
-          : {}),
-      },
-      {
-        source: "devforum" as const,
-        estimatedTotal: 100,
-        batchSize: 20,
-        runBatch: async () => {
-          await devForumPipeline.seed();
-          return { processed: 20, done: true, needsRebuild: true, logDetail: "20 topics" };
-        },
-        ...(embeddingIndexer
-          ? {
-              buildEmbeddings: async () => {
-                const docs = await buildDevforumEmbedDocs(store);
-                await embeddingIndexer.indexSource("devforum", docs);
-              },
-            }
-          : {}),
-      },
-    ],
+    indexer: sharedIndexer,
+    scheduler,
+    githubToken,
   });
 
   scheduler.jobRunner.schedule({
     name: "fastflags-update",
     intervalMs: 24 * 60 * 60 * 1000,
     task: async () => {
-      await fastFlagScraper.seed(githubToken);
+      const scraper = new FastFlagScraper(store, syncManager, sharedIndexer);
+      await scraper.seed(githubToken);
     },
   });
 
@@ -358,7 +267,8 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
     task: async () => {
       const needsSync = await syncManager.needsSync("devforum", { maxAge: 6 * 60 * 60 * 1000 });
       if (!needsSync) return;
-      await devForumPipeline.seed();
+      const pipeline = new DevForumPipeline(store, syncManager, sharedIndexer);
+      await pipeline.seed();
     },
   });
 
@@ -1054,10 +964,9 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
     // Defer startup so the MCP initialize handshake is never blocked. Restore
     // persisted/cli seed progress and detect warm on-disk cache before scheduling.
     setImmediate(() => {
-      const getDb =
-        typeof (store as unknown as Record<string, unknown>)["getDb"] === "function"
-          ? () => (store as unknown as { getDb(): import("better-sqlite3").Database }).getDb()
-          : undefined;
+      const getDb = createEmbeddingIndexer(store)
+        ? () => (store as IKeyValueStore & { getDb(): import("better-sqlite3").Database }).getDb()
+        : undefined;
 
       void (async () => {
         if (!store.isOpen()) {

@@ -172,7 +172,8 @@ vi.mock("../../fastflags/search.js", () => {
   return { FastFlagSearch: FakeFastFlagSearch };
 });
 
-vi.mock("../../scheduler/seed-manager.js", () => {
+vi.mock("../../scheduler/seed-manager.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../scheduler/seed-manager.js")>();
   class FakeSeedManager {
     startBackground = vi.fn();
     stop = vi.fn();
@@ -191,7 +192,7 @@ vi.mock("../../scheduler/seed-manager.js", () => {
     }
   }
 
-  return { SeedManager: FakeSeedManager };
+  return { ...actual, SeedManager: FakeSeedManager };
 });
 
 async function loadServer() {
