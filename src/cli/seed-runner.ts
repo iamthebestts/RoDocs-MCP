@@ -8,6 +8,7 @@ import {
   buildGuidesEmbedDocs,
 } from "../embedding/sources.js";
 import { FastFlagScraper } from "../fastflags/scraper.js";
+import { markSeedSourceComplete } from "../scheduler/seed-sync.js";
 import { ensureApiIndex, ensureGuideIndex, initIndexer } from "../search/index.js";
 import type { SeedProgressReporter } from "../seed/progress.js";
 import { noopSeedProgress } from "../seed/progress.js";
@@ -35,6 +36,7 @@ function createEmbeddingIndexer(store: IKeyValueStore): EmbeddingIndexer | null 
 
 export async function seedDocs(
   store: IKeyValueStore,
+  syncManager: ReturnType<typeof createSyncStateManager>,
   githubToken: string | undefined,
   reporter: SeedProgressReporter = noopSeedProgress,
 ): Promise<void> {
@@ -46,11 +48,15 @@ export async function seedDocs(
     reporter.onPhase("embed", "generating docs embedding vectors");
     const docs = await buildDocsEmbedDocs(githubToken);
     await embeddingIndexer.indexSource("docs", docs);
+    await markSeedSourceComplete(syncManager, "docs", { embeddingsComplete: true });
+  } else {
+    await markSeedSourceComplete(syncManager, "docs");
   }
 }
 
 export async function seedGuides(
   store: IKeyValueStore,
+  syncManager: ReturnType<typeof createSyncStateManager>,
   githubToken: string | undefined,
   reporter: SeedProgressReporter = noopSeedProgress,
 ): Promise<void> {
@@ -62,6 +68,9 @@ export async function seedGuides(
     reporter.onPhase("embed", "generating guides embedding vectors");
     const docs = await buildGuidesEmbedDocs(githubToken);
     await embeddingIndexer.indexSource("guides", docs);
+    await markSeedSourceComplete(syncManager, "guides", { embeddingsComplete: true });
+  } else {
+    await markSeedSourceComplete(syncManager, "guides");
   }
 }
 
@@ -81,6 +90,14 @@ export async function seedFastflags(
     reporter.onPhase("embed", "generating fastflags embedding vectors");
     const docs = await buildFastflagsEmbedDocs(store);
     await embeddingIndexer.indexSource("fastflags", docs);
+    await markSeedSourceComplete(syncManager, "fastflags", {
+      seededItems: result.added + result.updated,
+      embeddingsComplete: true,
+    });
+  } else {
+    await markSeedSourceComplete(syncManager, "fastflags", {
+      seededItems: result.added + result.updated,
+    });
   }
 
   return result;
@@ -105,6 +122,12 @@ export async function seedDevforum(
       elapsedMs: Date.now() - embedStartedAt,
       detail: `${docs.length} vectors`,
     });
+    await markSeedSourceComplete(syncManager, "devforum", {
+      seededItems: result.added,
+      embeddingsComplete: true,
+    });
+  } else if (result.added > 0 || result.discoveryFromCache) {
+    await markSeedSourceComplete(syncManager, "devforum", { seededItems: result.added });
   }
 
   return result;

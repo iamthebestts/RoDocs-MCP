@@ -1,5 +1,10 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import Database from "better-sqlite3";
+import { load as loadSqliteVec } from "sqlite-vec";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BM25 } from "../../search/bm25.js";
+import type { IKeyValueStore } from "../../store/store-interface.js";
 import type { SyncState } from "../../store/sync-state.js";
 import {
   DEFAULT_SEED_BATCH_SIZES,
@@ -25,6 +30,33 @@ class MemorySyncManager implements SeedSyncManager {
 
 function createIdleDetector(isIdle = true) {
   return { isIdle: vi.fn(() => isIdle) };
+}
+
+function makeStore(tmpDir: string, keys: string[] = []): IKeyValueStore {
+  return {
+    getPath: () => join(tmpDir, "store.db"),
+    keys: async () => keys,
+    get: async () => null,
+    put: async () => {},
+    del: async () => {},
+    clear: async () => {},
+    open: async () => {},
+    close: async () => undefined,
+    isOpen: () => true,
+  };
+}
+
+function makeVecDb(): Database.Database {
+  const db = new Database(":memory:");
+  loadSqliteVec(db);
+  db.exec(`
+    CREATE VIRTUAL TABLE vec_items USING vec0(
+      id TEXT PRIMARY KEY,
+      source TEXT,
+      embedding FLOAT[384]
+    )
+  `);
+  return db;
 }
 
 async function flushMicrotasks(): Promise<void> {
@@ -600,10 +632,11 @@ describe("SeedManager", () => {
     });
 
     await manager.processNextBatch();
-    // buildEmbeddings is fire-and-forget; flush microtasks
-    await new Promise((r) => setTimeout(r, 0));
-
     expect(rebuildIndex).toHaveBeenCalledOnce();
+    expect(buildEmbeddings).not.toHaveBeenCalled();
+
+    await manager.processNextBatch();
+
     expect(buildEmbeddings).toHaveBeenCalledOnce();
     const rebuildOrder = rebuildIndex.mock.invocationCallOrder[0] ?? 0;
     const embedOrder = buildEmbeddings.mock.invocationCallOrder[0] ?? 0;
@@ -630,8 +663,182 @@ describe("SeedManager", () => {
 
     manager.prioritize("docs");
     await manager.processNextBatch();
+    expect(buildEmbeddings).not.toHaveBeenCalled();
 
+    await manager.processNextBatch();
     expect(buildEmbeddings).toHaveBeenCalledOnce();
+  });
+
+  it("does not run buildEmbeddings until idle", async () => {
+    const buildEmbeddings = vi.fn(async () => {});
+    const idleDetector = createIdleDetector(false);
+    const manager = new SeedManager({
+      syncManager,
+      idleDetector,
+      runners: [
+        {
+          source: "docs",
+          estimatedTotal: 50,
+          batchSize: DEFAULT_SEED_BATCH_SIZES.docs,
+          runBatch: async () => ({ processed: 50, done: true }),
+          buildEmbeddings,
+        },
+      ],
+      logger,
+      yieldFn,
+    });
+
+    manager.prioritize("docs");
+    await manager.processNextBatch();
+    await manager.processNextBatch();
+
+    expect(buildEmbeddings).not.toHaveBeenCalled();
+    expect(manager.getProgress("docs").status).toBe("complete");
+  });
+
+  it("prioritize is a no-op when the source is already complete", async () => {
+    const runBatch = vi.fn(async () => ({ processed: 50, done: true }));
+    const manager = new SeedManager({
+      syncManager,
+      idleDetector: createIdleDetector(true),
+      runners: [
+        {
+          source: "docs",
+          estimatedTotal: 50,
+          batchSize: DEFAULT_SEED_BATCH_SIZES.docs,
+          runBatch,
+        },
+      ],
+      logger,
+      yieldFn,
+    });
+
+    manager.prioritize("docs");
+    await manager.processNextBatch();
+    expect(runBatch).toHaveBeenCalledOnce();
+
+    runBatch.mockClear();
+    manager.prioritize("docs");
+    await manager.processNextBatch();
+
+    expect(runBatch).not.toHaveBeenCalled();
+  });
+
+  it("prepareStartup() marks warm on-disk sources complete without re-seeding", async () => {
+    const tmpDir = join(
+      "/tmp",
+      `rodocs-seed-startup-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    await mkdir(tmpDir, { recursive: true });
+    await writeFile(join(tmpDir, "api.index.msgpack"), "x");
+
+    const runBatch = vi.fn(async () => ({ processed: 50, done: true }));
+    const manager = new SeedManager({
+      syncManager,
+      idleDetector: createIdleDetector(true),
+      runners: [
+        {
+          source: "docs",
+          estimatedTotal: 50,
+          batchSize: DEFAULT_SEED_BATCH_SIZES.docs,
+          runBatch,
+        },
+      ],
+      logger,
+      yieldFn,
+    });
+
+    await manager.prepareStartup({ store: makeStore(tmpDir) });
+
+    expect(manager.getProgress("docs")).toMatchObject({ status: "complete", percent: 1 });
+    await manager.processNextBatch();
+    expect(runBatch).not.toHaveBeenCalled();
+  });
+
+  it("prepareStartup() queues embeddings for complete sources missing vec rows", async () => {
+    const buildEmbeddings = vi.fn(async () => {});
+    const db = makeVecDb();
+    const manager = new SeedManager({
+      syncManager,
+      idleDetector: createIdleDetector(true),
+      runners: [
+        {
+          source: "docs",
+          estimatedTotal: 50,
+          batchSize: DEFAULT_SEED_BATCH_SIZES.docs,
+          runBatch: async () => ({ processed: 50, done: true }),
+          buildEmbeddings,
+        },
+      ],
+      logger,
+      yieldFn,
+    });
+
+    await syncManager.updateSourceState("seed:docs", {
+      metadata: {
+        seedProgress: {
+          source: "docs",
+          status: "complete",
+          seededItems: 50,
+          estimatedTotal: 50,
+          percent: 1,
+        },
+      },
+    });
+    await manager.prepareStartup({
+      store: makeStore("/tmp/rodocs-unused"),
+      getDb: () => db,
+    });
+
+    await manager.processNextBatch();
+    expect(buildEmbeddings).toHaveBeenCalledOnce();
+    db.close();
+  });
+
+  it("prepareStartup() skips embedding queue when vec rows already exist", async () => {
+    const buildEmbeddings = vi.fn(async () => {});
+    const db = makeVecDb();
+    db.prepare("INSERT INTO vec_items (id, source, embedding) VALUES (?, ?, ?)").run(
+      "Actor",
+      "docs",
+      new Float32Array(384).fill(0.1),
+    );
+
+    const manager = new SeedManager({
+      syncManager,
+      idleDetector: createIdleDetector(true),
+      runners: [
+        {
+          source: "docs",
+          estimatedTotal: 50,
+          batchSize: DEFAULT_SEED_BATCH_SIZES.docs,
+          runBatch: async () => ({ processed: 50, done: true }),
+          buildEmbeddings,
+        },
+      ],
+      logger,
+      yieldFn,
+    });
+
+    await syncManager.updateSourceState("seed:docs", {
+      metadata: {
+        seedProgress: {
+          source: "docs",
+          status: "complete",
+          seededItems: 50,
+          estimatedTotal: 50,
+          percent: 1,
+        },
+      },
+    });
+    await manager.prepareStartup({
+      store: makeStore("/tmp/rodocs-unused"),
+      getDb: () => db,
+    });
+
+    await manager.processNextBatch();
+    expect(buildEmbeddings).not.toHaveBeenCalled();
+    db.close();
   });
 
   it("buildEmbeddings error does not affect seed completion status", async () => {

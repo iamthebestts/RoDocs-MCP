@@ -1051,10 +1051,27 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
 
   if (options.autoStartScheduler !== false) {
     scheduler.start();
-    // Defer the seed start to a later tick so it can never run before the
-    // caller has wired the transport and answered the MCP `initialize`
-    // handshake. startBackground() is idempotent, so a single deferral is safe.
-    setImmediate(() => seedManager.startBackground());
+    // Defer startup so the MCP initialize handshake is never blocked. Restore
+    // persisted/cli seed progress and detect warm on-disk cache before scheduling.
+    setImmediate(() => {
+      const getDb =
+        typeof (store as unknown as Record<string, unknown>)["getDb"] === "function"
+          ? () => (store as unknown as { getDb(): import("better-sqlite3").Database }).getDb()
+          : undefined;
+
+      void (async () => {
+        if (!store.isOpen()) {
+          await store.open();
+        }
+        await seedManager.prepareStartup({ store, ...(getDb ? { getDb } : {}) });
+        seedManager.startBackground();
+      })().catch((err: unknown) => {
+        logger.error(
+          `[Seed] prepareStartup failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        seedManager.startBackground();
+      });
+    });
   }
 
   return { server, scheduler, seedManager, shutdown };

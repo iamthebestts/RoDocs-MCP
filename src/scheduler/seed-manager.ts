@@ -1,6 +1,9 @@
+import type Database from "better-sqlite3";
+import type { IKeyValueStore } from "../store/store-interface.js";
 import type { SyncState } from "../store/sync-state.js";
 import type { IdleDetector } from "./idle-detector.js";
 import type { RateLimiter } from "./rate-limiter.js";
+import { detectWarmSources, sourceNeedsEmbeddings } from "./warm-cache.js";
 
 export const SEED_SOURCES = ["docs", "guides", "fastflags", "devforum"] as const;
 export type SeedSource = (typeof SEED_SOURCES)[number];
@@ -42,6 +45,11 @@ export interface SeedSourceRunner {
   buildEmbeddings?: () => Promise<void>;
 }
 
+export type SeedStartupContext = {
+  store: IKeyValueStore;
+  getDb?: () => Database.Database | null;
+};
+
 export interface SeedManagerOptions {
   syncManager: SeedSyncManager;
   idleDetector: Pick<IdleDetector, "isIdle">;
@@ -69,7 +77,7 @@ export const DEFAULT_SEED_BATCH_SIZES: Record<SeedSource, number> = {
   devforum: 20,
 };
 
-const DEFAULT_ESTIMATED_TOTALS: Record<SeedSource, number> = {
+export const DEFAULT_ESTIMATED_TOTALS: Record<SeedSource, number> = {
   docs: 350,
   guides: 350,
   fastflags: 12,
@@ -126,6 +134,8 @@ export class SeedManager {
   private running = false;
   private scheduled = false;
   private startedAt = 0;
+  private readonly embeddingsPending = new Set<SeedSource>();
+  private startupDb: Database.Database | null = null;
 
   constructor(options: SeedManagerOptions) {
     this.syncManager = options.syncManager;
@@ -159,6 +169,26 @@ export class SeedManager {
     }
   }
 
+  async prepareStartup(ctx: SeedStartupContext): Promise<void> {
+    await this.loadPersistedProgress();
+    this.startupDb = ctx.getDb?.() ?? null;
+
+    const warm = await detectWarmSources({ store: ctx.store });
+    for (const source of warm) {
+      if (this.getProgress(source).status !== "complete") {
+        await this.markComplete(source, this.getProgress(source).estimatedTotal, true);
+      }
+    }
+
+    for (const source of SEED_SOURCES) {
+      if (this.getProgress(source).status !== "complete") continue;
+      if (await this.embeddingsAlreadyComplete(source)) continue;
+      if (this.runners.get(source)?.buildEmbeddings) {
+        this.queueEmbeddings(source);
+      }
+    }
+  }
+
   startBackground(): void {
     if (this.running || this.scheduled) return;
     this.startedAt = Date.now();
@@ -172,6 +202,7 @@ export class SeedManager {
   }
 
   prioritize(source: SeedSource): void {
+    if (this.getProgress(source).status === "complete") return;
     this.demandedSources.add(source);
     this.moveToFront(source);
     this.scheduleNext();
@@ -192,6 +223,12 @@ export class SeedManager {
 
   async processNextBatch(): Promise<boolean> {
     if (this.running) return false;
+
+    const embedded = await this.tryProcessEmbeddings();
+    if (embedded) {
+      await this.yieldFn();
+      return true;
+    }
 
     const source = this.nextSource();
     if (source === null) {
@@ -305,15 +342,69 @@ export class SeedManager {
         await runner.rebuildIndex?.();
       }
 
-      if (runner.buildEmbeddings) {
-        runner.buildEmbeddings().catch((err: unknown) => {
-          this.logger.error(
-            `[Seed] ${source}: buildEmbeddings failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
-          );
-        });
+      if (runner.buildEmbeddings && !(await this.embeddingsAlreadyComplete(source))) {
+        this.queueEmbeddings(source);
       }
       this.logger.error(`[Seed] ${source}: complete (${updated.seededItems} entries)`);
     }
+  }
+
+  private queueEmbeddings(source: SeedSource): void {
+    this.embeddingsPending.add(source);
+    this.scheduleNext();
+  }
+
+  private async tryProcessEmbeddings(): Promise<boolean> {
+    if (this.embeddingsPending.size === 0) return false;
+    if (!this.idleDetector.isIdle()) return false;
+
+    const source = this.embeddingsPending.values().next().value;
+    if (!source) return false;
+
+    if (await this.embeddingsAlreadyComplete(source)) {
+      this.embeddingsPending.delete(source);
+      return false;
+    }
+
+    const runner = this.runners.get(source);
+    if (!runner?.buildEmbeddings) {
+      this.embeddingsPending.delete(source);
+      return false;
+    }
+
+    this.running = true;
+    try {
+      await runner.buildEmbeddings();
+      await this.persistEmbeddingsComplete(source);
+      this.embeddingsPending.delete(source);
+      this.logger.error(`[Seed] ${source}: embeddings complete`);
+      return true;
+    } catch (err: unknown) {
+      this.logger.error(
+        `[Seed] ${source}: buildEmbeddings failed (will retry when idle): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return false;
+    } finally {
+      this.running = false;
+    }
+  }
+
+  private async embeddingsAlreadyComplete(source: SeedSource): Promise<boolean> {
+    const state = await this.syncManager.getSourceState(progressKey(source));
+    if (state?.metadata?.embeddingsComplete === true) return true;
+    if (!this.startupDb) return false;
+    return !sourceNeedsEmbeddings(this.startupDb, source);
+  }
+
+  private async persistEmbeddingsComplete(source: SeedSource): Promise<void> {
+    const state = await this.syncManager.getSourceState(progressKey(source));
+    const metadata = {
+      ...(state?.metadata ?? {}),
+      embeddingsComplete: true,
+    };
+    await this.syncManager.updateSourceState(progressKey(source), { metadata });
   }
 
   private async markComplete(
@@ -335,8 +426,12 @@ export class SeedManager {
   }
 
   private async persistProgress(progress: SeedProgress): Promise<void> {
+    const existing = await this.syncManager.getSourceState(progressKey(progress.source));
     const state: Partial<SyncState> = {
-      metadata: { seedProgress: progress },
+      metadata: {
+        ...(existing?.metadata ?? {}),
+        seedProgress: progress,
+      },
     };
     if (progress.status === "complete") state.lastSyncAt = Date.now();
     await this.syncManager.updateSourceState(progressKey(progress.source), state);

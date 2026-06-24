@@ -613,8 +613,8 @@ export async function main(
     const progress = createCliSeedProgressReporter("docs");
     try {
       progress.onPhase("store", "opening local cache");
-      const { store } = await openSeedContext();
-      await seedDocs(store, githubToken, progress);
+      const { store, syncManager } = await openSeedContext();
+      await seedDocs(store, syncManager, githubToken, progress);
       progress.onPhase("done", "API index ready");
       process.stdout.write(`${c("green", "✔")} Successfully seeded API docs index.\n`);
       await store.close();
@@ -631,8 +631,8 @@ export async function main(
     const progress = createCliSeedProgressReporter("guides");
     try {
       progress.onPhase("store", "opening local cache");
-      const { store } = await openSeedContext();
-      await seedGuides(store, githubToken, progress);
+      const { store, syncManager } = await openSeedContext();
+      await seedGuides(store, syncManager, githubToken, progress);
       progress.onPhase("done", "guides index ready");
       process.stdout.write(`${c("green", "✔")} Successfully seeded guides index.\n`);
       await store.close();
@@ -698,11 +698,11 @@ export async function main(
       const { store, syncManager, indexer } = await openSeedContext();
 
       const docsProgress = createCliSeedProgressReporter("docs");
-      await seedDocs(store, githubToken, docsProgress);
+      await seedDocs(store, syncManager, githubToken, docsProgress);
       docsProgress.onPhase("done", "complete");
 
       const guidesProgress = createCliSeedProgressReporter("guides");
-      await seedGuides(store, githubToken, guidesProgress);
+      await seedGuides(store, syncManager, githubToken, guidesProgress);
       guidesProgress.onPhase("done", "complete");
 
       const flagsProgress = createCliSeedProgressReporter("fastflags");

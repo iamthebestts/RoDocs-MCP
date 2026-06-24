@@ -177,6 +177,7 @@ vi.mock("../../scheduler/seed-manager.js", () => {
     startBackground = vi.fn();
     stop = vi.fn();
     prioritize = vi.fn();
+    prepareStartup = vi.fn(async () => {});
     getProgress = vi.fn((source: string) => ({
       source,
       status: "pending",
