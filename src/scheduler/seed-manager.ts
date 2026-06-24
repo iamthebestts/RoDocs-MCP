@@ -3,6 +3,7 @@ import type { IKeyValueStore } from "../store/store-interface.js";
 import type { SyncState } from "../store/sync-state.js";
 import type { IdleDetector } from "./idle-detector.js";
 import type { RateLimiter } from "./rate-limiter.js";
+import { seedProgressKey } from "./seed-sync.js";
 import { detectWarmSources, sourceNeedsEmbeddings } from "./warm-cache.js";
 
 export const SEED_SOURCES = ["docs", "guides", "fastflags", "devforum"] as const;
@@ -42,7 +43,7 @@ export interface SeedSourceRunner {
   runBatch: (context: SeedBatchContext) => Promise<SeedBatchResult>;
   rebuildIndex?: () => Promise<void>;
   /** Called after rebuildIndex; errors are isolated and non-fatal */
-  buildEmbeddings?: () => Promise<void>;
+  buildEmbeddings?: () => Promise<number | undefined>;
 }
 
 export type SeedStartupContext = {
@@ -92,10 +93,6 @@ const SEED_RETRY_MAX_MS = 30_000;
 
 function defaultYield(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
-}
-
-function progressKey(source: SeedSource): string {
-  return `seed:${source}`;
 }
 
 function calculatePercent(seededItems: number, estimatedTotal: number): number {
@@ -161,7 +158,7 @@ export class SeedManager {
 
   async loadPersistedProgress(): Promise<void> {
     for (const source of SEED_SOURCES) {
-      const state = await this.syncManager.getSourceState(progressKey(source));
+      const state = await this.syncManager.getSourceState(seedProgressKey(source));
       const persisted = state?.metadata?.seedProgress;
       if (isProgress(persisted, source)) {
         this.progress.set(source, persisted);
@@ -374,8 +371,8 @@ export class SeedManager {
 
     this.running = true;
     try {
-      await runner.buildEmbeddings();
-      await this.persistEmbeddingsComplete(source);
+      const count = await runner.buildEmbeddings();
+      await this.persistEmbeddingsComplete(source, count ?? 0);
       this.embeddingsPending.delete(source);
       this.logger.error(`[Seed] ${source}: embeddings complete`);
       return true;
@@ -392,19 +389,37 @@ export class SeedManager {
   }
 
   private async embeddingsAlreadyComplete(source: SeedSource): Promise<boolean> {
-    const state = await this.syncManager.getSourceState(progressKey(source));
-    if (state?.metadata?.embeddingsComplete === true) return true;
-    if (!this.startupDb) return false;
-    return !sourceNeedsEmbeddings(this.startupDb, source);
+    const state = await this.syncManager.getSourceState(seedProgressKey(source));
+    const metadata = this.readEmbeddingMetadata(state?.metadata);
+    if (!this.startupDb) {
+      return metadata.embeddingsComplete === true && metadata.embeddingsCount !== undefined;
+    }
+    return !sourceNeedsEmbeddings(this.startupDb, source, metadata);
   }
 
-  private async persistEmbeddingsComplete(source: SeedSource): Promise<void> {
-    const state = await this.syncManager.getSourceState(progressKey(source));
+  private readEmbeddingMetadata(raw: SyncState["metadata"] | undefined): {
+    embeddingsComplete?: boolean;
+    embeddingsCount?: number;
+  } {
+    if (typeof raw !== "object" || raw === null) return {};
+    const m = raw as Record<string, unknown>;
+    return {
+      ...(m.embeddingsComplete === true ? { embeddingsComplete: true } : {}),
+      ...(typeof m.embeddingsCount === "number" ? { embeddingsCount: m.embeddingsCount } : {}),
+    };
+  }
+
+  private async persistEmbeddingsComplete(
+    source: SeedSource,
+    embeddingsCount: number,
+  ): Promise<void> {
+    const state = await this.syncManager.getSourceState(seedProgressKey(source));
     const metadata = {
       ...(state?.metadata ?? {}),
       embeddingsComplete: true,
+      embeddingsCount,
     };
-    await this.syncManager.updateSourceState(progressKey(source), { metadata });
+    await this.syncManager.updateSourceState(seedProgressKey(source), { metadata });
   }
 
   private async markComplete(
@@ -426,7 +441,7 @@ export class SeedManager {
   }
 
   private async persistProgress(progress: SeedProgress): Promise<void> {
-    const existing = await this.syncManager.getSourceState(progressKey(progress.source));
+    const existing = await this.syncManager.getSourceState(seedProgressKey(progress.source));
     const state: Partial<SyncState> = {
       metadata: {
         ...(existing?.metadata ?? {}),
@@ -434,7 +449,7 @@ export class SeedManager {
       },
     };
     if (progress.status === "complete") state.lastSyncAt = Date.now();
-    await this.syncManager.updateSourceState(progressKey(progress.source), state);
+    await this.syncManager.updateSourceState(seedProgressKey(progress.source), state);
   }
 
   private scheduleNext(): void {

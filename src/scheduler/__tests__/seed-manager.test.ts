@@ -36,6 +36,7 @@ function makeStore(tmpDir: string, keys: string[] = []): IKeyValueStore {
   return {
     getPath: () => join(tmpDir, "store.db"),
     keys: async () => keys,
+    countByPrefix: async (prefix: string) => keys.filter((k) => k.startsWith(prefix)).length,
     get: async () => null,
     put: async () => {},
     del: async () => {},
@@ -613,7 +614,7 @@ describe("SeedManager", () => {
 
   it("calls buildEmbeddings after rebuildIndex when source completes with needsRebuild", async () => {
     const rebuildIndex = vi.fn(async () => {});
-    const buildEmbeddings = vi.fn(async () => {});
+    const buildEmbeddings = vi.fn(async () => 1);
     const manager = new SeedManager({
       syncManager,
       idleDetector: createIdleDetector(true),
@@ -644,7 +645,7 @@ describe("SeedManager", () => {
   });
 
   it("calls buildEmbeddings without needsRebuild when configured", async () => {
-    const buildEmbeddings = vi.fn(async () => {});
+    const buildEmbeddings = vi.fn(async () => 1);
     const manager = new SeedManager({
       syncManager,
       idleDetector: createIdleDetector(true),
@@ -670,7 +671,7 @@ describe("SeedManager", () => {
   });
 
   it("does not run buildEmbeddings until idle", async () => {
-    const buildEmbeddings = vi.fn(async () => {});
+    const buildEmbeddings = vi.fn(async () => 1);
     const idleDetector = createIdleDetector(false);
     const manager = new SeedManager({
       syncManager,
@@ -756,7 +757,7 @@ describe("SeedManager", () => {
   });
 
   it("prepareStartup() queues embeddings for complete sources missing vec rows", async () => {
-    const buildEmbeddings = vi.fn(async () => {});
+    const buildEmbeddings = vi.fn(async () => 1);
     const db = makeVecDb();
     const manager = new SeedManager({
       syncManager,
@@ -796,7 +797,55 @@ describe("SeedManager", () => {
   });
 
   it("prepareStartup() skips embedding queue when vec rows already exist", async () => {
-    const buildEmbeddings = vi.fn(async () => {});
+    const buildEmbeddings = vi.fn(async () => 1);
+    const db = makeVecDb();
+    db.prepare("INSERT INTO vec_items (id, source, embedding) VALUES (?, ?, ?)").run(
+      "Actor",
+      "docs",
+      new Float32Array(384).fill(0.1),
+    );
+
+    const manager = new SeedManager({
+      syncManager,
+      idleDetector: createIdleDetector(true),
+      runners: [
+        {
+          source: "docs",
+          estimatedTotal: 50,
+          batchSize: DEFAULT_SEED_BATCH_SIZES.docs,
+          runBatch: async () => ({ processed: 50, done: true }),
+          buildEmbeddings,
+        },
+      ],
+      logger,
+      yieldFn,
+    });
+
+    await syncManager.updateSourceState("seed:docs", {
+      metadata: {
+        seedProgress: {
+          source: "docs",
+          status: "complete",
+          seededItems: 50,
+          estimatedTotal: 50,
+          percent: 1,
+        },
+        embeddingsComplete: true,
+        embeddingsCount: 1,
+      },
+    });
+    await manager.prepareStartup({
+      store: makeStore("/tmp/rodocs-unused"),
+      getDb: () => db,
+    });
+
+    await manager.processNextBatch();
+    expect(buildEmbeddings).not.toHaveBeenCalled();
+    db.close();
+  });
+
+  it("prepareStartup() queues embeddings when partial vec rows exist without completion metadata", async () => {
+    const buildEmbeddings = vi.fn(async () => 1);
     const db = makeVecDb();
     db.prepare("INSERT INTO vec_items (id, source, embedding) VALUES (?, ?, ?)").run(
       "Actor",
@@ -837,7 +886,7 @@ describe("SeedManager", () => {
     });
 
     await manager.processNextBatch();
-    expect(buildEmbeddings).not.toHaveBeenCalled();
+    expect(buildEmbeddings).toHaveBeenCalledOnce();
     db.close();
   });
 

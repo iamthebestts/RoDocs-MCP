@@ -89,6 +89,14 @@ export class SqliteStore implements IKeyValueStore {
     return rows.map((r) => r.key);
   }
 
+  async countByPrefix(prefix: string): Promise<number> {
+    const db = this.ensureOpen();
+    const row = db
+      .prepare<[string], { count: number }>("SELECT COUNT(*) AS count FROM kv WHERE key LIKE ?")
+      .get(`${prefix}%`);
+    return row?.count ?? 0;
+  }
+
   async clear(): Promise<void> {
     const db = this.ensureOpen();
     db.prepare("DELETE FROM kv").run();

@@ -13,7 +13,7 @@ export function seedProgressKey(source: SeedSource): string {
 export async function markSeedSourceComplete(
   syncManager: SeedSyncManager,
   source: SeedSource,
-  options?: { seededItems?: number; embeddingsComplete?: boolean },
+  options?: { seededItems?: number; embeddingsComplete?: boolean; embeddingsCount?: number },
 ): Promise<void> {
   const estimatedTotal = DEFAULT_ESTIMATED_TOTALS[source];
   const seededItems = options?.seededItems ?? estimatedTotal;
@@ -32,6 +32,9 @@ export async function markSeedSourceComplete(
   };
   if (options?.embeddingsComplete) {
     metadata.embeddingsComplete = true;
+  }
+  if (options?.embeddingsCount !== undefined) {
+    metadata.embeddingsCount = options.embeddingsCount;
   }
 
   const state: Partial<SyncState> = {

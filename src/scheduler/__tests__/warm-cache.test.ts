@@ -9,12 +9,14 @@ import {
   detectWarmSources,
   resolveCacheDir,
   sourceNeedsEmbeddings,
+  WARM_KV_MIN_COUNTS,
 } from "../warm-cache.js";
 
 function makeStore(tmpDir: string, keys: string[] = []): IKeyValueStore {
   return {
     getPath: () => join(tmpDir, "store.db"),
     keys: async () => keys,
+    countByPrefix: async (prefix: string) => keys.filter((k) => k.startsWith(prefix)).length,
     get: async () => null,
     put: async () => {},
     del: async () => {},
@@ -45,15 +47,26 @@ describe("warm-cache", () => {
     expect(warm).toContain("guides");
   });
 
-  it("detectWarmSources() marks fastflags/devforum from kv prefixes", async () => {
+  it("detectWarmSources() does not mark devforum warm with a single key", async () => {
     const warm = await detectWarmSources({
-      store: makeStore(tmpDir, ["fastflags:FFlag1", "devforum:42"]),
+      store: makeStore(tmpDir, ["devforum:42"]),
     });
-    expect(warm).toContain("fastflags");
-    expect(warm).toContain("devforum");
+    expect(warm).not.toContain("devforum");
   });
 
-  it("sourceNeedsEmbeddings() returns false when vec rows exist", () => {
+  it("detectWarmSources() marks kv sources when prefix count meets threshold", async () => {
+    const devforumKeys = Array.from(
+      { length: WARM_KV_MIN_COUNTS.devforum },
+      (_, i) => `devforum:${i}`,
+    );
+    const warm = await detectWarmSources({
+      store: makeStore(tmpDir, [...devforumKeys, "fastflags:only-one"]),
+    });
+    expect(warm).toContain("devforum");
+    expect(warm).not.toContain("fastflags");
+  });
+
+  it("sourceNeedsEmbeddings() returns true when partial embeddings exist without completion metadata", () => {
     const db = new Database(":memory:");
     loadSqliteVec(db);
     db.exec(`
@@ -68,7 +81,28 @@ describe("warm-cache", () => {
       "docs",
       new Float32Array(384).fill(0.1),
     );
-    expect(sourceNeedsEmbeddings(db, "docs")).toBe(false);
+    expect(sourceNeedsEmbeddings(db, "docs")).toBe(true);
+    db.close();
+  });
+
+  it("sourceNeedsEmbeddings() returns false when embeddings match declared count", () => {
+    const db = new Database(":memory:");
+    loadSqliteVec(db);
+    db.exec(`
+      CREATE VIRTUAL TABLE vec_items USING vec0(
+        id TEXT PRIMARY KEY,
+        source TEXT,
+        embedding FLOAT[384]
+      )
+    `);
+    db.prepare("INSERT INTO vec_items (id, source, embedding) VALUES (?, ?, ?)").run(
+      "Actor",
+      "docs",
+      new Float32Array(384).fill(0.1),
+    );
+    expect(
+      sourceNeedsEmbeddings(db, "docs", { embeddingsComplete: true, embeddingsCount: 1 }),
+    ).toBe(false);
     expect(countEmbeddingsForSource(db, "docs")).toBe(1);
     db.close();
   });

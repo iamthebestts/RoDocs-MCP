@@ -11,14 +11,20 @@ export class EmbeddingIndexer {
     private readonly db: Database.Database,
   ) {}
 
-  async indexSource(source: string, docs: EmbedDoc[]): Promise<void> {
+  async indexSource(source: string, docs: EmbedDoc[]): Promise<number> {
     const uniqueDocs = dedupeEmbedDocs(docs);
-    if (uniqueDocs.length === 0) return;
+    if (uniqueDocs.length === 0) return 0;
 
     await this.clearSource(source);
 
     const texts = uniqueDocs.map((d) => d.text);
     const vectors = await embed(texts);
+
+    if (vectors.length !== uniqueDocs.length) {
+      throw new Error(
+        `[EmbeddingIndexer] vector count mismatch for ${source}: expected ${uniqueDocs.length}, got ${vectors.length}`,
+      );
+    }
 
     const upsert = this.db.prepare(
       `INSERT OR REPLACE INTO vec_items (id, source, embedding) VALUES (?, ?, ?)`,
@@ -32,14 +38,17 @@ export class EmbeddingIndexer {
       },
     );
 
-    const entries = uniqueDocs.map((doc, i) => ({
-      id: doc.id,
-      source: doc.source,
-      vec: vectors[i] ?? new Float32Array(384),
-    }));
+    const entries = uniqueDocs.map((doc, i) => {
+      const vec = vectors[i];
+      if (!vec) {
+        throw new Error(`[EmbeddingIndexer] missing vector for ${source} doc ${doc.id}`);
+      }
+      return { id: doc.id, source: doc.source, vec };
+    });
 
     insertMany(entries);
     observe({ event: "embedding.indexed", source, metadata: { count: uniqueDocs.length } });
+    return uniqueDocs.length;
   }
 
   async clearSource(source: string): Promise<void> {

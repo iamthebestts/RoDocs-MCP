@@ -8,6 +8,11 @@ export type WarmCacheContext = {
   store: IKeyValueStore;
 };
 
+export type EmbeddingSyncMetadata = {
+  embeddingsComplete?: boolean;
+  embeddingsCount?: number;
+};
+
 const BM25_INDEX_FILES: Readonly<Record<"docs" | "guides", string>> = {
   docs: "api.index.msgpack",
   guides: "guides.index.msgpack",
@@ -16,6 +21,12 @@ const BM25_INDEX_FILES: Readonly<Record<"docs" | "guides", string>> = {
 const KV_PREFIXES: Readonly<Record<"fastflags" | "devforum", string>> = {
   fastflags: "fastflags:",
   devforum: "devforum:",
+};
+
+/** Minimum KV rows required before treating a source as warm. */
+export const WARM_KV_MIN_COUNTS: Readonly<Record<"fastflags" | "devforum", number>> = {
+  fastflags: 3,
+  devforum: 5,
 };
 
 export function resolveCacheDir(store: IKeyValueStore): string {
@@ -32,11 +43,11 @@ export async function detectWarmSources(ctx: WarmCacheContext): Promise<SeedSour
     if (existsSync(join(cacheDir, file))) warm.add(source);
   }
 
-  const keys = await ctx.store.keys();
   for (const [source, prefix] of Object.entries(KV_PREFIXES) as Array<
     ["fastflags" | "devforum", string]
   >) {
-    if (keys.some((key) => key.startsWith(prefix))) warm.add(source);
+    const count = await ctx.store.countByPrefix(prefix);
+    if (count >= WARM_KV_MIN_COUNTS[source]) warm.add(source);
   }
 
   return [...warm];
@@ -56,7 +67,19 @@ export function countEmbeddingsForSource(db: Database.Database, source: string):
 export function sourceNeedsEmbeddings(
   db: Database.Database | null | undefined,
   source: SeedSource,
+  metadata?: EmbeddingSyncMetadata,
 ): boolean {
   if (!db) return false;
-  return countEmbeddingsForSource(db, source) === 0;
+  const actual = countEmbeddingsForSource(db, source);
+  if (actual === 0) return true;
+
+  if (metadata?.embeddingsComplete === true && metadata.embeddingsCount !== undefined) {
+    return actual < metadata.embeddingsCount;
+  }
+
+  if (metadata?.embeddingsComplete !== true) {
+    return true;
+  }
+
+  return false;
 }

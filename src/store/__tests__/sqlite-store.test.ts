@@ -47,6 +47,15 @@ describe("SqliteStore", () => {
     expect(await store.get("key2")).toBe(null);
   });
 
+  it("countByPrefix() counts keys with matching prefix", async () => {
+    await store.put("fastflags:a", { name: "a" });
+    await store.put("fastflags:b", { name: "b" });
+    await store.put("devforum:1", { title: "t" });
+    expect(await store.countByPrefix("fastflags:")).toBe(2);
+    expect(await store.countByPrefix("devforum:")).toBe(1);
+    expect(await store.countByPrefix("missing:")).toBe(0);
+  });
+
   it("should list all keys", async () => {
     await store.put("a", 1);
     await store.put("b", 2);

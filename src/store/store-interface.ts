@@ -3,6 +3,8 @@ export interface IKeyValueStore {
   put<T>(key: string, value: T): Promise<void>;
   del(key: string): Promise<void>;
   keys(): Promise<string[]>;
+  /** Count KV entries whose key starts with the given prefix. */
+  countByPrefix(prefix: string): Promise<number>;
   clear(): Promise<void>;
   open(): Promise<void>;
   close(): Promise<undefined | unknown>;

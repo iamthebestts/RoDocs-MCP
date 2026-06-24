@@ -33,6 +33,8 @@ function createStubStore(): IKeyValueStore {
     open: async () => {},
     close: async () => {},
     keys: async () => [...data.keys()],
+    countByPrefix: async (prefix: string) =>
+      [...data.keys()].filter((k) => k.startsWith(prefix)).length,
     get: async (key: string) => data.get(key) ?? null,
     put: async () => {},
     del: async () => {},

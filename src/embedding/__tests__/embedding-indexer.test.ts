@@ -29,6 +29,7 @@ function makeInMemoryStore() {
     put: vi.fn(),
     del: vi.fn(),
     keys: vi.fn().mockResolvedValue([]),
+    countByPrefix: vi.fn().mockResolvedValue(0),
     clear: vi.fn(),
     open: vi.fn(),
     close: vi.fn(),
@@ -73,7 +74,9 @@ describe("EmbeddingIndexer", () => {
       { id: "a", source: "docs", text: "doc a" },
       { id: "b", source: "guides", text: "guide b" },
     ];
-    mockEmbed.mockResolvedValue([new Float32Array(384).fill(0.1), new Float32Array(384).fill(0.2)]);
+    mockEmbed
+      .mockResolvedValueOnce([new Float32Array(384).fill(0.1)])
+      .mockResolvedValueOnce([new Float32Array(384).fill(0.2)]);
     const [docA, docB] = docs;
     if (!docA || !docB) throw new Error("test setup");
     await indexer.indexSource("docs", [docA]);
@@ -103,6 +106,13 @@ describe("EmbeddingIndexer", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.id).toBe("Color3");
     expect(mockEmbed).toHaveBeenCalledWith(["Color3 datatype"]);
+  });
+
+  it("indexSource() throws when vector count mismatches doc count", async () => {
+    const docs: EmbedDoc[] = [{ id: "a", source: "docs", text: "one" }];
+    mockEmbed.mockResolvedValue([]);
+
+    await expect(indexer.indexSource("docs", docs)).rejects.toThrow(/vector count mismatch/);
   });
 
   it("indexSource() replaces existing rows for the same source", async () => {
