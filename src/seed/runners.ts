@@ -44,6 +44,14 @@ export type SeedRunnersDeps = {
   devForumPipeline: DevForumPipeline;
 };
 
+export type SeedRunOptions = {
+  buildEmbeddings?: boolean;
+};
+
+function shouldBuildEmbeddings(options?: SeedRunOptions): boolean {
+  return options?.buildEmbeddings !== false;
+}
+
 async function indexEmbeddingsIfNeeded(
   embeddingIndexer: EmbeddingIndexer | null,
   source: "docs" | "guides" | "fastflags" | "devforum",
@@ -67,13 +75,14 @@ async function indexEmbeddingsIfNeeded(
 export async function runDocsSeed(
   deps: Pick<SeedRunnersDeps, "store" | "syncManager" | "githubToken" | "embeddingIndexer">,
   reporter: SeedProgressReporter = noopSeedProgress,
+  options?: SeedRunOptions,
 ): Promise<void> {
   reporter.onPhase("index", "building API reference BM25 index");
   await ensureApiIndex(deps.githubToken);
 
   const docs = await buildDocsEmbedDocs(deps.githubToken);
   const count = await indexEmbeddingsIfNeeded(
-    deps.embeddingIndexer,
+    shouldBuildEmbeddings(options) ? deps.embeddingIndexer : null,
     "docs",
     docs,
     deps.syncManager,
@@ -90,13 +99,14 @@ export async function runDocsSeed(
 export async function runGuidesSeed(
   deps: Pick<SeedRunnersDeps, "store" | "syncManager" | "githubToken" | "embeddingIndexer">,
   reporter: SeedProgressReporter = noopSeedProgress,
+  options?: SeedRunOptions,
 ): Promise<void> {
   reporter.onPhase("index", "building guides BM25 index");
   await ensureGuideIndex(deps.githubToken);
 
   const docs = await buildGuidesEmbedDocs(deps.githubToken);
   const count = await indexEmbeddingsIfNeeded(
-    deps.embeddingIndexer,
+    shouldBuildEmbeddings(options) ? deps.embeddingIndexer : null,
     "guides",
     docs,
     deps.syncManager,
@@ -113,11 +123,12 @@ export async function runGuidesSeed(
 export async function runFastflagsSeed(
   deps: SeedRunnersDeps,
   reporter: SeedProgressReporter = noopSeedProgress,
+  options?: SeedRunOptions,
 ): Promise<{ added: number; updated: number }> {
   reporter.onPhase("fetch", "downloading flags from MaximumADHD");
   const result = await deps.fastFlagScraper.seed(deps.githubToken);
 
-  if (deps.embeddingIndexer) {
+  if (deps.embeddingIndexer && shouldBuildEmbeddings(options)) {
     reporter.onPhase("embed", "generating fastflags embedding vectors");
     const docs = await buildFastflagsEmbedDocs(deps.store);
     const count = await deps.embeddingIndexer.indexSource("fastflags", docs);
@@ -140,11 +151,13 @@ export async function runFastflagsSeed(
 export async function runDevforumSeed(
   deps: SeedRunnersDeps,
   reporter: SeedProgressReporter = noopSeedProgress,
+  options?: SeedRunOptions,
 ): Promise<Awaited<ReturnType<DevForumPipeline["seed"]>>> {
   const result = await deps.devForumPipeline.seed({ reporter });
 
   const db = hasGetDb(deps.store) ? deps.store.getDb() : null;
   const needsEmbed =
+    shouldBuildEmbeddings(options) &&
     deps.embeddingIndexer !== null &&
     sourceNeedsEmbeddings(db, "devforum", await getDevforumEmbedMetadata(deps.syncManager));
 
@@ -194,7 +207,7 @@ export function createSeedSourceRunners(deps: SeedRunnersDeps): SeedSourceRunner
       estimatedTotal: totals.docs,
       batchSize: totals.docs,
       runBatch: async () => {
-        await runDocsSeed(deps);
+        await runDocsSeed(deps, noopSeedProgress, { buildEmbeddings: false });
         return { processed: totals.docs, done: true, logDetail: "full API index" };
       },
       ...(deps.embeddingIndexer
@@ -220,7 +233,7 @@ export function createSeedSourceRunners(deps: SeedRunnersDeps): SeedSourceRunner
       estimatedTotal: totals.guides,
       batchSize: totals.guides,
       runBatch: async () => {
-        await runGuidesSeed(deps);
+        await runGuidesSeed(deps, noopSeedProgress, { buildEmbeddings: false });
         return { processed: totals.guides, done: true, logDetail: "full guides index" };
       },
       ...(deps.embeddingIndexer
@@ -246,7 +259,7 @@ export function createSeedSourceRunners(deps: SeedRunnersDeps): SeedSourceRunner
       estimatedTotal: totals.fastflags,
       batchSize: totals.fastflags,
       runBatch: async () => {
-        await runFastflagsSeed(deps);
+        await runFastflagsSeed(deps, noopSeedProgress, { buildEmbeddings: false });
         return {
           processed: totals.fastflags,
           done: true,
@@ -277,7 +290,7 @@ export function createSeedSourceRunners(deps: SeedRunnersDeps): SeedSourceRunner
       estimatedTotal: totals.devforum,
       batchSize: totals.devforum,
       runBatch: async () => {
-        await runDevforumSeed(deps);
+        await runDevforumSeed(deps, noopSeedProgress, { buildEmbeddings: false });
         return {
           processed: totals.devforum,
           done: true,

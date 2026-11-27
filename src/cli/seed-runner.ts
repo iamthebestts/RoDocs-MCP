@@ -9,6 +9,7 @@ import {
   runFastflagsSeed,
   runGuidesSeed,
   type SeedRunnersDeps,
+  type SeedRunOptions,
 } from "../seed/runners.js";
 import type { createSyncStateManager, IKeyValueStore, Indexer } from "../store/index.js";
 import { openSeedContext } from "./seed-context.js";
@@ -20,6 +21,7 @@ export async function seedDocs(
   syncManager: ReturnType<typeof createSyncStateManager>,
   githubToken: string | undefined,
   reporter: SeedProgressReporter = noopSeedProgress,
+  options?: SeedRunOptions,
 ): Promise<void> {
   await runDocsSeed(
     {
@@ -29,6 +31,7 @@ export async function seedDocs(
       embeddingIndexer: createEmbeddingIndexer(store),
     },
     reporter,
+    options,
   );
 }
 
@@ -37,6 +40,7 @@ export async function seedGuides(
   syncManager: ReturnType<typeof createSyncStateManager>,
   githubToken: string | undefined,
   reporter: SeedProgressReporter = noopSeedProgress,
+  options?: SeedRunOptions,
 ): Promise<void> {
   await runGuidesSeed(
     {
@@ -46,6 +50,7 @@ export async function seedGuides(
       embeddingIndexer: createEmbeddingIndexer(store),
     },
     reporter,
+    options,
   );
 }
 
@@ -55,6 +60,7 @@ export async function seedFastflags(
   indexer: Indexer,
   githubToken: string | undefined,
   reporter: SeedProgressReporter = noopSeedProgress,
+  options?: SeedRunOptions,
 ): Promise<{ added: number; updated: number }> {
   return runFastflagsSeed(
     {
@@ -66,6 +72,7 @@ export async function seedFastflags(
       devForumPipeline: new DevForumPipeline(store, syncManager, indexer),
     },
     reporter,
+    options,
   );
 }
 
@@ -74,6 +81,7 @@ export async function seedDevforum(
   syncManager: ReturnType<typeof createSyncStateManager>,
   indexer: Indexer,
   reporter: SeedProgressReporter = noopSeedProgress,
+  options?: SeedRunOptions,
 ): Promise<Awaited<ReturnType<DevForumPipeline["seed"]>>> {
   return runDevforumSeed(
     {
@@ -85,6 +93,7 @@ export async function seedDevforum(
       devForumPipeline: new DevForumPipeline(store, syncManager, indexer),
     },
     reporter,
+    options,
   );
 }
 

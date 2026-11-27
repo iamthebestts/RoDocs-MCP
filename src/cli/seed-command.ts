@@ -1,4 +1,5 @@
 import type { SeedProgressReporter } from "../seed/progress.js";
+import type { SeedRunOptions } from "../seed/runners.js";
 import { openSeedContext, type SeedContext } from "./seed-context.js";
 import { createCliSeedProgressReporter } from "./seed-progress.js";
 import { seedDevforum, seedDocs, seedFastflags, seedGuides } from "./seed-runner.js";
@@ -29,8 +30,10 @@ export type RunSeedCommandOptions = {
     ctx: SeedContext,
     progress: SeedProgressReporter,
     githubToken: string | undefined,
+    options: SeedRunOptions,
   ) => Promise<void>;
   formatSuccess: (ctx: SeedContext) => string;
+  seedOptions?: SeedRunOptions;
   io?: Partial<SeedCommandIo>;
   openContext?: () => Promise<SeedContext>;
   createProgress?: (source: string) => SeedProgressReporter;
@@ -53,7 +56,7 @@ export async function runSeedCommand(options: RunSeedCommandOptions): Promise<vo
   try {
     progress.onPhase("store", "opening local cache");
     const ctx = await openContext();
-    await options.run(ctx, progress, options.githubToken);
+    await options.run(ctx, progress, options.githubToken, options.seedOptions ?? {});
     io.writeStdout(options.formatSuccess(ctx));
     await ctx.store.close();
   } catch (err: unknown) {
@@ -65,6 +68,7 @@ export async function runSeedCommand(options: RunSeedCommandOptions): Promise<vo
 
 export type RunSeedAllCommandOptions = {
   githubToken: string | undefined;
+  seedOptions?: SeedRunOptions;
   formatSuccess?: () => string;
   io?: Partial<SeedCommandIo>;
   openContext?: () => Promise<SeedContext>;
@@ -73,18 +77,25 @@ export type RunSeedAllCommandOptions = {
     ctx: SeedContext,
     progress: SeedProgressReporter,
     githubToken: string | undefined,
+    options: SeedRunOptions,
   ) => Promise<void>;
   runGuides?: (
     ctx: SeedContext,
     progress: SeedProgressReporter,
     githubToken: string | undefined,
+    options: SeedRunOptions,
   ) => Promise<void>;
   runFastflags?: (
     ctx: SeedContext,
     progress: SeedProgressReporter,
     githubToken: string | undefined,
+    options: SeedRunOptions,
   ) => Promise<{ added: number; updated: number }>;
-  runDevforum?: (ctx: SeedContext, progress: SeedProgressReporter) => Promise<unknown>;
+  runDevforum?: (
+    ctx: SeedContext,
+    progress: SeedProgressReporter,
+    options: SeedRunOptions,
+  ) => Promise<unknown>;
 };
 
 export async function runSeedAllCommand(options: RunSeedAllCommandOptions): Promise<void> {
@@ -93,27 +104,31 @@ export async function runSeedAllCommand(options: RunSeedAllCommandOptions): Prom
   const createProgress = options.createProgress ?? createCliSeedProgressReporter;
   const runDocs =
     options.runDocs ??
-    ((ctx, progress, token) => seedDocs(ctx.store, ctx.syncManager, token, progress));
+    ((ctx, progress, token, seedOptions) =>
+      seedDocs(ctx.store, ctx.syncManager, token, progress, seedOptions));
   const runGuides =
     options.runGuides ??
-    ((ctx, progress, token) => seedGuides(ctx.store, ctx.syncManager, token, progress));
+    ((ctx, progress, token, seedOptions) =>
+      seedGuides(ctx.store, ctx.syncManager, token, progress, seedOptions));
   const runFastflags =
     options.runFastflags ??
-    ((ctx, progress, token) =>
-      seedFastflags(ctx.store, ctx.syncManager, ctx.indexer, token, progress));
+    ((ctx, progress, token, seedOptions) =>
+      seedFastflags(ctx.store, ctx.syncManager, ctx.indexer, token, progress, seedOptions));
   const runDevforum =
     options.runDevforum ??
-    ((ctx, progress) => seedDevforum(ctx.store, ctx.syncManager, ctx.indexer, progress));
+    ((ctx, progress, seedOptions) =>
+      seedDevforum(ctx.store, ctx.syncManager, ctx.indexer, progress, seedOptions));
 
   const progress = createProgress("all");
   try {
     progress.onPhase("store", "opening local cache");
     const ctx = await openContext();
 
-    await runDocs(ctx, progress, options.githubToken);
-    await runGuides(ctx, progress, options.githubToken);
-    await runFastflags(ctx, progress, options.githubToken);
-    await runDevforum(ctx, progress);
+    const seedOptions = options.seedOptions ?? {};
+    await runDocs(ctx, progress, options.githubToken, seedOptions);
+    await runGuides(ctx, progress, options.githubToken, seedOptions);
+    await runFastflags(ctx, progress, options.githubToken, seedOptions);
+    await runDevforum(ctx, progress, seedOptions);
 
     io.writeStdout(options.formatSuccess?.() ?? "Successfully completed all seeds.\n");
     await ctx.store.close();

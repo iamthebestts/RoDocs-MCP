@@ -54,4 +54,27 @@ describe("seed runners", () => {
     }
     expect(runBatch).not.toHaveBeenCalled();
   });
+
+  it("defers embeddings out of runBatch in createSeedSourceRunners()", async () => {
+    const indexSource = vi.fn().mockResolvedValue(1);
+    const seedFastflagsMock = vi.fn().mockResolvedValue({ added: 5, updated: 0 });
+    const deps: SeedRunnersDeps = {
+      store: makeStore(),
+      githubToken: undefined,
+      embeddingIndexer: { indexSource } as unknown as SeedRunnersDeps["embeddingIndexer"],
+      fastFlagScraper: {
+        seed: seedFastflagsMock,
+      } as unknown as SeedRunnersDeps["fastFlagScraper"],
+      devForumPipeline: { seed: vi.fn() } as unknown as SeedRunnersDeps["devForumPipeline"],
+    };
+
+    const runners = createSeedSourceRunners(deps);
+    const ffRunner = runners.find((r) => r.source === "fastflags");
+    expect(ffRunner).toBeDefined();
+
+    await ffRunner?.runBatch({ source: "fastflags", batchSize: 12 });
+
+    expect(seedFastflagsMock).toHaveBeenCalledTimes(1);
+    expect(indexSource).not.toHaveBeenCalled();
+  });
 });

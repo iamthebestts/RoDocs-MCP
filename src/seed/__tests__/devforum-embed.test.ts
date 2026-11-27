@@ -104,4 +104,50 @@ describe("runDevforumSeed embeddings", () => {
     expect(rows.count).toBe(1);
     store.close();
   });
+
+  it("skips embeddings when buildEmbeddings is false", async () => {
+    const store = makeStoreWithDb();
+    const syncManager = {
+      states: new Map<string, unknown>(),
+      async getSourceState(key: string) {
+        return (this.states.get(key) as null) ?? null;
+      },
+      async updateSourceState(key: string, state: unknown) {
+        this.states.set(key, state);
+      },
+    };
+
+    const pipeline = {
+      seed: vi.fn().mockResolvedValue({
+        added: 1,
+        lowScore: 0,
+        failed: 0,
+        rejected: 0,
+        bm25Invalidated: true,
+        discoveryFromCache: false,
+      }),
+    } as unknown as DevForumPipeline;
+
+    const { EmbeddingIndexer } = await import("../../embedding/embedding-indexer.js");
+    const embeddingIndexer = new EmbeddingIndexer(store, store.getDb());
+
+    await runDevforumSeed(
+      {
+        store,
+        syncManager,
+        githubToken: undefined,
+        embeddingIndexer,
+        fastFlagScraper: {} as FastFlagScraper,
+        devForumPipeline: pipeline,
+      },
+      undefined,
+      { buildEmbeddings: false },
+    );
+
+    const rows = store.getDb().prepare("SELECT COUNT(*) AS count FROM vec_items").get() as {
+      count: number;
+    };
+    expect(rows.count).toBe(0);
+    store.close();
+  });
 });
