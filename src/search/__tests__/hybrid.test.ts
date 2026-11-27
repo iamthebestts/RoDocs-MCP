@@ -169,4 +169,18 @@ describe("hybridSearch()", () => {
     expect(result.searchMode).toBe("hybrid");
     expect(Array.isArray(result.results)).toBe(true);
   });
+
+  it("hydrates and returns vector-only hits that BM25 did not return", async () => {
+    const vec = new Float32Array(384).fill(0.1);
+    mockEmbed.mockResolvedValue([vec]);
+
+    const db = makeDbMock([{ id: "RunService", distance: 0.02 }]);
+    const store = makeStoreWithDb(db);
+
+    const result = await hybridSearch(store, "frame loop", "docs", 5);
+
+    expect(result.searchMode).toBe("hybrid");
+    expect(mockEmbed).toHaveBeenCalledWith(["frame loop"], { mode: "query" });
+    expect(result.results.map((r) => r.name)).toContain("RunService");
+  });
 });

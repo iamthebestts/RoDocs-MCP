@@ -38,19 +38,39 @@ function tensorToVectors(output: EmbedOutput): Float32Array[] {
   throw new Error(`Unsupported embedding dims: ${dims.join("x")}`);
 }
 
-export async function embed(texts: string[]): Promise<Float32Array[]> {
+export type EmbedMode = "query" | "passage";
+
+export interface EmbedOptions {
+  /**
+   * Prefix mode for E5-family embedding models (`multilingual-e5-small`).
+   * - `"query"` prepends `"query: "` (for search queries)
+   * - `"passage"` prepends `"passage: "` (for indexed documents)
+   * Omit to pass raw text through unchanged.
+   */
+  mode?: EmbedMode;
+}
+
+function applyModePrefix(text: string, mode: EmbedMode | undefined): string {
+  if (mode === undefined) return text;
+  const prefix = `${mode}: `;
+  return text.startsWith(prefix) ? text : `${prefix}${text}`;
+}
+
+export async function embed(texts: string[], options?: EmbedOptions): Promise<Float32Array[]> {
   if (texts.length === 0) return [];
 
   const model = (await loadModel()) as unknown as EmbedFn;
   const batchSize = readBatchSize();
+  const mode = options?.mode;
+  const preparedTexts = mode ? texts.map((text) => applyModePrefix(text, mode)) : texts;
   const results: Float32Array[] = [];
 
-  for (let offset = 0; offset < texts.length; offset += batchSize) {
-    const batch = texts.slice(offset, offset + batchSize);
+  for (let offset = 0; offset < preparedTexts.length; offset += batchSize) {
+    const batch = preparedTexts.slice(offset, offset + batchSize);
     const input = batch.length === 1 ? (batch[0] ?? "") : batch;
     const output = await model(input, { pooling: "mean" });
     results.push(...tensorToVectors(output));
-    if (offset + batchSize < texts.length) {
+    if (offset + batchSize < preparedTexts.length) {
       await yieldToEventLoop();
     }
   }

@@ -79,4 +79,26 @@ describe("embed()", () => {
     expect(results[0]?.[0]).toBeCloseTo(0.6, 4);
     expect(results[0]?.[1]).toBeCloseTo(0.8, 4);
   });
+
+  it("prepends E5 mode prefixes when mode is specified without double-prefixing", async () => {
+    const model = vi.fn().mockResolvedValue({
+      data: new Float32Array([1, 0, 0, 1]),
+      dims: [2, 2],
+      normalize: () => ({
+        data: new Float32Array([1, 0, 0, 1]),
+        dims: [2, 2],
+      }),
+    });
+    mockLoadModel.mockResolvedValue(model as unknown as Awaited<ReturnType<typeof loadModel>>);
+
+    await embed(["tween animation", "query: already prefixed"], { mode: "query" });
+    expect(model).toHaveBeenCalledWith(["query: tween animation", "query: already prefixed"], {
+      pooling: "mean",
+    });
+
+    await embed(["TweenService docs", "passage: already"], { mode: "passage" });
+    expect(model).toHaveBeenCalledWith(["passage: TweenService docs", "passage: already"], {
+      pooling: "mean",
+    });
+  });
 });
