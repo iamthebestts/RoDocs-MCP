@@ -604,4 +604,11 @@ describe("searchGuides (direct)", () => {
       expect(mockFetchGuideIndex).not.toHaveBeenCalled();
     });
   });
+
+  describe("prefix fallback", () => {
+    it("resolves partial API prefixes like 'tweenserv' to 'TweenService'", async () => {
+      const results = await searchApis("tweenserv", 5);
+      expect(results[0]?.name).toBe("TweenService");
+    });
+  });
 });

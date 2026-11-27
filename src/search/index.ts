@@ -143,6 +143,15 @@ function findExactApiName(query: string): string | undefined {
   return [...apiCategories.keys()].find((name) => name.toLowerCase() === normalized);
 }
 
+function findPrefixApiNames(query: string, limit: number): string[] {
+  const normalized = query.toLowerCase().replace(/\s+/g, "");
+  if (normalized.length < 3) return [];
+  return [...apiCategories.keys()]
+    .filter((name) => name.toLowerCase().startsWith(normalized))
+    .sort((a, b) => a.length - b.length || a.localeCompare(b))
+    .slice(0, limit);
+}
+
 export function sortByRecency<T extends SearchResult & { ageDays?: number | undefined }>(
   results: readonly T[],
   config: RecencyConfig = {},
@@ -265,6 +274,13 @@ export async function searchApis(
     ]).filter((r) => r.score >= API_SCORE_THRESHOLD);
 
     if (results.length > 0) return results;
+
+    const prefixMatches = findPrefixApiNames(query, limit);
+    if (prefixMatches.length > 0) {
+      return prefixMatches.map((name, i) =>
+        projectApiResult(name, Math.max(API_SCORE_THRESHOLD, 20 - i)),
+      );
+    }
 
     const closest = findClosestMatch(query, [...apiCategories.keys()]);
     if (closest === null) return [];
