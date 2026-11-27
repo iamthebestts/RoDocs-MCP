@@ -25,6 +25,9 @@ Use this decision tree to pick the right tool:
 "Broad search across everything"
   → roblox_search (multi-source)
 
+"Are results incomplete or is cache seeded?"
+  -> rodocs_status
+
 "What FastFlags exist for X?"
   → roblox_fastflags
 
@@ -270,6 +273,31 @@ When sources are still warming up, the response includes:
   "warming": true,
   "hints": { "fastflags": "This source is still warming up..." },
   "progress": { "fastflags": { "status": "running", "processed": 3, "total": 12 } }
+}
+```
+
+## `rodocs_status`
+Reports local RoDocs cache, seed progress, record counts, vector counts, and warming hints.
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `source` | `string` | No | `"all"` (default), `"docs"`, `"guides"`, `"fastflags"`, or `"devforum"`. |
+
+**Example Response**
+```json
+{
+  "cachePath": "/home/me/.cache/rodocsmcp/store.db",
+  "githubTokenConfigured": true,
+  "sources": [
+    {
+      "source": "fastflags",
+      "persistedStatus": "complete",
+      "records": 24993,
+      "vectors": null,
+      "embeddingsComplete": false,
+      "hint": "Run `rodocs seed fastflags --no-embed` for immediate full seed."
+    }
+  ]
 }
 ```
 

@@ -13,6 +13,7 @@ import { scrapeIndex, scrapeMany, scrapeTopic } from "../scraper/index.js";
 import { initIndexer, search, searchGuides } from "../search/index.js";
 import { ROBLOX_SEARCH_SOURCES, robloxSearch } from "../search/roblox-search.js";
 import { createEmbeddingIndexer } from "../seed/runners.js";
+import { CACHE_SEED_SOURCES, readCacheStatus } from "../seed/status.js";
 import {
   createSyncStateManager,
   type IKeyValueStore,
@@ -22,6 +23,7 @@ import {
 } from "../store/index.js";
 import { parseGithubTokenArgs, resolveGithubToken } from "../utils/github-token.js";
 import { logger } from "../utils/logger.js";
+import { APP_VERSION } from "../utils/version.js";
 import { createSeedManager } from "./seed-wiring.js";
 
 // ! AI projection types
@@ -110,24 +112,51 @@ function projectCodeSample(sample: CodeSample): {
   };
 }
 
-function projectForAI(entry: RobloxDocEntry, includeInherited = false): AIEntry {
+interface ProjectForAIOptions {
+  includeInherited?: boolean | undefined;
+  memberFilter?: string | undefined;
+  memberKind?: AIMember["kind"] | undefined;
+  summaryOnly?: boolean | undefined;
+}
+
+function projectForAI(
+  entry: RobloxDocEntry,
+  options: boolean | ProjectForAIOptions = false,
+): AIEntry {
+  const opts: ProjectForAIOptions =
+    typeof options === "boolean" ? { includeInherited: options } : options;
+  const includeInherited = opts.includeInherited ?? false;
   const cl = entry.class;
 
-  const ownMembers: AIMember[] = [
-    ...cl.ownMembers.properties.map((m) => projectMember(m, "property", false)),
-    ...cl.ownMembers.methods.map((m) => projectMember(m, "method", false)),
-    ...cl.ownMembers.events.map((m) => projectMember(m, "event", false)),
-    ...cl.ownMembers.callbacks.map((m) => projectMember(m, "callback", false)),
-  ];
+  let members: AIMember[] = [];
+  if (!opts.summaryOnly) {
+    const ownMembers: AIMember[] = [
+      ...cl.ownMembers.properties.map((m) => projectMember(m, "property", false)),
+      ...cl.ownMembers.methods.map((m) => projectMember(m, "method", false)),
+      ...cl.ownMembers.events.map((m) => projectMember(m, "event", false)),
+      ...cl.ownMembers.callbacks.map((m) => projectMember(m, "callback", false)),
+    ];
 
-  const inheritedMembers: AIMember[] = includeInherited
-    ? entry.inheritedMembers.flatMap((group) => [
-        ...group.properties.map((m) => projectMember(m, "property", true, group.fromClass)),
-        ...group.methods.map((m) => projectMember(m, "method", true, group.fromClass)),
-        ...group.events.map((m) => projectMember(m, "event", true, group.fromClass)),
-        ...group.callbacks.map((m) => projectMember(m, "callback", true, group.fromClass)),
-      ])
-    : [];
+    const inheritedMembers: AIMember[] = includeInherited
+      ? entry.inheritedMembers.flatMap((group) => [
+          ...group.properties.map((m) => projectMember(m, "property", true, group.fromClass)),
+          ...group.methods.map((m) => projectMember(m, "method", true, group.fromClass)),
+          ...group.events.map((m) => projectMember(m, "event", true, group.fromClass)),
+          ...group.callbacks.map((m) => projectMember(m, "callback", true, group.fromClass)),
+        ])
+      : [];
+
+    members = [...ownMembers, ...inheritedMembers];
+    if (opts.memberKind) {
+      members = members.filter((m) => m.kind === opts.memberKind);
+    }
+    if (opts.memberFilter) {
+      const needle = opts.memberFilter.toLowerCase();
+      members = members.filter(
+        (m) => m.name.toLowerCase().includes(needle) || m.summary.toLowerCase().includes(needle),
+      );
+    }
+  }
 
   const result: AIEntry = {
     name: cl.name,
@@ -135,8 +164,8 @@ function projectForAI(entry: RobloxDocEntry, includeInherited = false): AIEntry 
     summary: cl.summary || cl.description,
     inherits: cl.inherits,
     deprecated: cl.deprecationMessage.length > 0 || cl.tags.includes("Deprecated"),
-    members: [...ownMembers, ...inheritedMembers],
-    codeSamples: cl.codeSamples.map(projectCodeSample),
+    members,
+    codeSamples: opts.summaryOnly ? [] : cl.codeSamples.map(projectCodeSample),
   };
 
   if (cl.deprecationMessage) result.deprecationMessage = cl.deprecationMessage;
@@ -165,6 +194,12 @@ export interface CreateServerOptions {
   autoStartScheduler?: boolean;
   store?: IKeyValueStore;
   syncManager?: SyncStateManager;
+  /** Shared Indexer instance (used by daemon to avoid re-wiring global singletons per connection). */
+  indexer?: Indexer;
+  /** Shared Scheduler instance (used by daemon to avoid duplicating background jobs per connection). */
+  scheduler?: Scheduler;
+  /** Shared SeedManager instance (used by daemon to share background seeding state). */
+  seedManager?: SeedManager;
   initializeStore?: boolean;
 }
 
@@ -175,14 +210,28 @@ export interface ServerInstance {
   shutdown: () => void;
 }
 
+const LOCAL_READ_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+} as const;
+
+const REMOTE_READ_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true,
+} as const;
+
 const WARMING_HINTS: Record<SeedSource, string> = {
-  docs: "This source is still warming up. Results may be incomplete. Run --seed-docs for immediate full seed.",
+  docs: "This source is still warming up. Results may be incomplete. Run `rodocs seed docs` for immediate full seed.",
   guides:
-    "This source is still warming up. Results may be incomplete. Run --seed-guides for immediate full seed.",
+    "This source is still warming up. Results may be incomplete. Run `rodocs seed guides` for immediate full seed.",
   fastflags:
-    "This source is still warming up. Results may be incomplete. Run --seed-fastflags for immediate full seed.",
+    "This source is still warming up. Results may be incomplete. Run `rodocs seed fastflags --no-embed` for immediate full seed.",
   devforum:
-    "This source is still warming up. Results may be incomplete. Run --seed-devforum for immediate full seed.",
+    "This source is still warming up. Results may be incomplete. Run `rodocs seed devforum` for immediate full seed.",
 };
 
 function searchSources(source: (typeof ROBLOX_SEARCH_SOURCES)[number]): SeedSource[] {
@@ -217,65 +266,72 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
   }
   const syncManager = options.syncManager ?? createSyncStateManager(store);
 
-  // Single shared Indexer so that write-side invalidation (scraper/pipeline) reaches
-  // the in-memory caches registered via onClear() in the search modules. Always wire
-  // the search singletons to it — including when store/syncManager are external (daemon
-  // path) — otherwise devforum search degrades to a full-scan fallback and pipeline
-  // writes never invalidate the in-memory BM25 caches.
-  const sharedIndexer = new Indexer(store, syncManager);
-  initIndexer(store, syncManager, sharedIndexer);
-  initDevForumSearch(sharedIndexer);
+  const ownsIndexer = options.indexer === undefined;
+  const sharedIndexer = options.indexer ?? new Indexer(store, syncManager);
+  if (ownsIndexer) {
+    initIndexer(store, syncManager, sharedIndexer);
+    initDevForumSearch(sharedIndexer);
+  }
 
-  if (createEmbeddingIndexer(store) === null) {
+  const embeddingIndexerAvailable = createEmbeddingIndexer(store) !== null;
+  if (!embeddingIndexerAvailable) {
     logger.warn("[Server] EmbeddingIndexer could not be initialized; hybrid search disabled");
   }
 
   const ffSearch = new FastFlagSearch(store, sharedIndexer);
 
-  const scheduler = new Scheduler(options.schedulerOptions);
-  setupRateLimiter(scheduler.devForumRateLimiter);
+  const ownsScheduler = options.scheduler === undefined;
+  const scheduler = options.scheduler ?? new Scheduler(options.schedulerOptions);
+  if (ownsScheduler) {
+    setupRateLimiter(scheduler.devForumRateLimiter);
+  }
 
   const server = new McpServer({
     name: "rodocsmcp",
-    version: "2.0.0",
+    version: APP_VERSION,
   });
 
-  const seedManager = createSeedManager({
-    store,
-    syncManager,
-    indexer: sharedIndexer,
-    scheduler,
-    githubToken,
-  });
+  const ownsSeedManager = options.seedManager === undefined;
+  const seedManager =
+    options.seedManager ??
+    createSeedManager({
+      store,
+      syncManager,
+      indexer: sharedIndexer,
+      scheduler,
+      githubToken,
+    });
 
-  scheduler.jobRunner.schedule({
-    name: "fastflags-update",
-    intervalMs: 24 * 60 * 60 * 1000,
-    task: async () => {
-      const scraper = new FastFlagScraper(store, syncManager, sharedIndexer);
-      await scraper.seed(githubToken);
-    },
-  });
+  if (ownsScheduler) {
+    scheduler.jobRunner.schedule({
+      name: "fastflags-update",
+      intervalMs: 24 * 60 * 60 * 1000,
+      task: async () => {
+        const scraper = new FastFlagScraper(store, syncManager, sharedIndexer);
+        await scraper.seed(githubToken);
+      },
+    });
 
-  scheduler.jobRunner.schedule({
-    name: "devforum-update",
-    intervalMs: 6 * 60 * 60 * 1000,
-    constraints: (now) => {
-      const utcHour = now.getUTCHours();
-      return utcHour < 14 || utcHour >= 22;
-    },
-    task: async () => {
-      const needsSync = await syncManager.needsSync("devforum", { maxAge: 6 * 60 * 60 * 1000 });
-      if (!needsSync) return;
-      const pipeline = new DevForumPipeline(store, syncManager, sharedIndexer);
-      await pipeline.seed();
-    },
-  });
+    scheduler.jobRunner.schedule({
+      name: "devforum-update",
+      intervalMs: 6 * 60 * 60 * 1000,
+      constraints: (now) => {
+        const utcHour = now.getUTCHours();
+        return utcHour < 14 || utcHour >= 22;
+      },
+      task: async () => {
+        const needsSync = await syncManager.needsSync("devforum", { maxAge: 6 * 60 * 60 * 1000 });
+        if (!needsSync) return;
+        const pipeline = new DevForumPipeline(store, syncManager, sharedIndexer);
+        await pipeline.seed();
+      },
+    });
+  }
 
   const ownsStore = options.store === undefined;
   const shutdown = () => {
-    seedManager.stop();
-    scheduler.stop();
+    if (ownsSeedManager) seedManager.stop();
+    if (ownsScheduler) scheduler.stop();
     if (ownsStore) {
       store.close();
     }
@@ -289,7 +345,9 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
         "Returns API documentation for a single Roblox class, enum, datatype, library or global. " +
         "Own members are always included. Inherited members are excluded by default — " +
         "set includeInherited=true only when the user explicitly asks about parent-class behavior. " +
+        "Use memberFilter, memberKind, or summaryOnly to reduce payload size on large classes. " +
         "Includes parameter types, return types, security levels, thread safety and sample metadata.",
+      annotations: REMOTE_READ_ANNOTATIONS,
       inputSchema: {
         topic: z
           .string()
@@ -302,19 +360,65 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
           .optional()
           .default(false)
           .describe("When true, includes members inherited from parent classes. Default: false."),
+        memberFilter: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Optional case-insensitive substring filter on member name or summary."),
+        memberKind: z
+          .enum(["property", "method", "event", "callback"])
+          .optional()
+          .describe("Optional filter to return only members of a specific kind."),
+        summaryOnly: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe("When true, omits members and codeSamples for a compact overview."),
       },
     },
-    async ({ topic, includeInherited }) => {
+    async ({ topic, includeInherited, memberFilter, memberKind, summaryOnly }) => {
       scheduler.recordActivity();
-      const result = await scrapeTopic(topic, githubToken);
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(projectForAI(result.entry, includeInherited), null, 2),
-          },
-        ],
-      };
+      try {
+        const result = await scrapeTopic(topic, githubToken);
+        const projected = projectForAI(result.entry, {
+          includeInherited,
+          memberFilter,
+          memberKind,
+          summaryOnly,
+        });
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(projected, null, 2),
+            },
+          ],
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const suggestions = await search(topic, { types: ["api"], limit: 3 }, githubToken).catch(
+          () => [],
+        );
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(
+                {
+                  error: message,
+                  topic,
+                  ...(suggestions.length > 0
+                    ? { suggestions: suggestions.map((s) => s.name) }
+                    : {}),
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      }
     },
   );
 
@@ -326,6 +430,7 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
         "Fetches API references for up to 20 Roblox topics in one call. " +
         "Returns partial results — failed topics include an error message, successful ones return full docs. " +
         "Inherited members are excluded by default; set includeInherited=true to include them.",
+      annotations: REMOTE_READ_ANNOTATIONS,
       inputSchema: {
         topics: z
           .array(z.string().min(1))
@@ -367,25 +472,51 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
     {
       title: "List All Roblox API Names",
       description:
-        "Returns all Roblox API names grouped by class, datatype, enum, global, and library. " +
-        "Does NOT include documentation — only names. Use this to discover available APIs, " +
-        "validate topic names before calling get_api_reference, or build autocomplete lists.",
-      inputSchema: {},
+        "Returns Roblox API names grouped by class, datatype, enum, global, and library. " +
+        "Does NOT include documentation — only names. Supports optional kind, prefix, and limit filters " +
+        "to keep responses compact. Use this to discover available APIs or validate topic names.",
+      annotations: REMOTE_READ_ANNOTATIONS,
+      inputSchema: {
+        kind: z
+          .enum(["class", "datatype", "enum", "global", "library"])
+          .optional()
+          .describe("Optional filter to return only one API kind."),
+        prefix: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Optional case-insensitive prefix filter on API names."),
+        limit: z
+          .number()
+          .min(1)
+          .max(5000)
+          .optional()
+          .describe("Optional maximum number of names per group."),
+      },
     },
-    async () => {
+    async ({ kind, prefix, limit }) => {
       scheduler.recordActivity();
       const result = await scrapeIndex(githubToken);
+      const needle = prefix?.toLowerCase();
+      const filterNames = (names: readonly string[], groupKind: string): string[] => {
+        if (kind !== undefined && kind !== groupKind) return [];
+        const filtered =
+          needle !== undefined
+            ? names.filter((name) => name.toLowerCase().startsWith(needle))
+            : [...names];
+        return limit !== undefined ? filtered.slice(0, limit) : filtered;
+      };
       return {
         content: [
           {
             type: "text" as const,
             text: JSON.stringify(
               {
-                classes: result.classes,
-                datatypes: result.datatypes ?? [],
-                enums: result.enums,
-                globals: result.globals ?? [],
-                libraries: result.libraries ?? [],
+                classes: filterNames(result.classes, "class"),
+                datatypes: filterNames(result.datatypes ?? [], "datatype"),
+                enums: filterNames(result.enums, "enum"),
+                globals: filterNames(result.globals ?? [], "global"),
+                libraries: filterNames(result.libraries ?? [], "library"),
               },
               null,
               2,
@@ -406,6 +537,7 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
         "before calling get_api_reference. Also resolves common aliases (e.g. 'datastore'). " +
         "Returns the best match plus up to 4 runner-up candidates with confidence scores. " +
         "Recommended first step in the lookup workflow: find_api_name → get_api_reference.",
+      annotations: REMOTE_READ_ANNOTATIONS,
       inputSchema: {
         query: z.string().min(1).describe("Partial or approximate API name to search for."),
       },
@@ -447,6 +579,7 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
         "BM25-searches the Roblox creator-docs repository for guides, tutorials and documentation pages " +
         "matching a free-text query. Returns results with path, title, description and category. " +
         "Use this for tutorial/conceptual questions. For API reference, prefer find_api_name → get_api_reference.",
+      annotations: REMOTE_READ_ANNOTATIONS,
       inputSchema: {
         query: z
           .string()
@@ -487,6 +620,7 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
         "Results are grouped by source. Use this for broad exploratory queries that may span multiple sources. " +
         "For precise workflows, prefer: find_api_name → get_api_reference (API lookup), " +
         "search_guides → get_guide (tutorials), roblox_fastflags (flag-specific), roblox_devforum (community solutions).",
+      annotations: LOCAL_READ_ANNOTATIONS,
       inputSchema: {
         query: z
           .string()
@@ -557,6 +691,52 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
   );
 
   server.registerTool(
+    "rodocs_status",
+    {
+      title: "Get RoDocs Cache and Seed Status",
+      description:
+        "Reports local RoDocs cache, seed progress, record counts, vector counts, and warming hints. " +
+        "Use this before expensive searches when results look incomplete or when diagnosing setup/cache state.",
+      annotations: LOCAL_READ_ANNOTATIONS,
+      inputSchema: {
+        source: z
+          .enum(["all", "docs", "guides", "fastflags", "devforum"])
+          .optional()
+          .default("all")
+          .describe("Source to inspect. Default: all."),
+      },
+    },
+    async ({ source }) => {
+      scheduler.recordActivity();
+      const sources = source === "all" ? CACHE_SEED_SOURCES : [source];
+      const snapshot = await readCacheStatus(store, syncManager, sources);
+      const details = snapshot.sources.map((entry) => ({
+        ...entry,
+        progress: seedManager.getProgress(entry.source),
+        hint: WARMING_HINTS[entry.source],
+      }));
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              {
+                cachePath: snapshot.cachePath,
+                sqliteVecAvailable: snapshot.sqliteVecAvailable,
+                githubTokenConfigured: githubToken !== undefined,
+                sources: details,
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    },
+  );
+
+  server.registerTool(
     "roblox_devforum",
     {
       title: "Search Curated Roblox DevForum Records",
@@ -564,6 +744,7 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
         "Searches locally seeded curated DevForum technical records for community solutions and patterns. " +
         "Offline-only; does not call DevForum. Use this for implementation patterns, community workarounds, " +
         "and real-world usage examples. For official docs, prefer get_api_reference or search_guides instead.",
+      annotations: LOCAL_READ_ANNOTATIONS,
       inputSchema: {
         query: z.string().min(1).describe("Technical query to search in local DevForum records."),
         tags: z
@@ -631,6 +812,7 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
         "The path is the relative path returned by search_guides or list_guides " +
         '(e.g.: "scripting/services/tween-service.md"). ' +
         "Returns raw Markdown including frontmatter, prose and code samples.",
+      annotations: REMOTE_READ_ANNOTATIONS,
       inputSchema: {
         path: z
           .string()
@@ -666,14 +848,43 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
     {
       title: "List All Roblox Creator Guides",
       description:
-        "Returns the full index of all Roblox creator guide paths and their categories. " +
-        "Title and description fields are populated lazily as guides are fetched — " +
-        "they may be empty on first call. Use search_guides for a faster filtered view.",
-      inputSchema: {},
+        "Returns the index of Roblox creator guide paths and their categories. " +
+        "Supports optional category, prefix, and limit filters to keep responses compact. " +
+        "Use search_guides for a faster keyword search.",
+      annotations: REMOTE_READ_ANNOTATIONS,
+      inputSchema: {
+        category: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Optional case-insensitive category filter (e.g. 'scripting', 'physics')."),
+        prefix: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Optional case-insensitive path prefix filter."),
+        limit: z
+          .number()
+          .min(1)
+          .max(5000)
+          .optional()
+          .describe("Optional maximum number of guide entries to return."),
+      },
     },
-    async () => {
+    async ({ category, prefix, limit }) => {
       scheduler.recordActivity();
-      const entries = await fetchGuideIndex(githubToken);
+      let entries = await fetchGuideIndex(githubToken);
+      if (category !== undefined) {
+        const cat = category.toLowerCase();
+        entries = entries.filter((entry) => entry.category.toLowerCase() === cat);
+      }
+      if (prefix !== undefined) {
+        const pfx = prefix.toLowerCase();
+        entries = entries.filter((entry) => entry.path.toLowerCase().startsWith(pfx));
+      }
+      if (limit !== undefined) {
+        entries = entries.slice(0, limit);
+      }
       return {
         content: [
           {
@@ -692,6 +903,7 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
       description:
         "Returns code sample metadata for a Roblox API topic. " +
         "Use when you want examples without the full API payload.",
+      annotations: REMOTE_READ_ANNOTATIONS,
       inputSchema: {
         topic: z
           .string()
@@ -720,6 +932,7 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
       description:
         "Compares member names across 2–5 Roblox API topics. " +
         "Shows shared members and members unique to each topic.",
+      annotations: REMOTE_READ_ANNOTATIONS,
       inputSchema: {
         topics: z
           .array(z.string().min(1))
@@ -781,6 +994,7 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
       description:
         "Returns deprecation and tag metadata for a Roblox API topic. " +
         "Use this to avoid suggesting removed or deprecated members.",
+      annotations: REMOTE_READ_ANNOTATIONS,
       inputSchema: {
         topic: z.string().min(1).describe("Exact topic name, e.g.: TweenService, Humanoid"),
       },
@@ -859,6 +1073,7 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
         "Supports filtering by name substring, kind, behavior, and platform. " +
         "Use this for debugging, feature detection, or checking experimental features. " +
         "For broader search across all sources, use roblox_search with source='fastflags'.",
+      annotations: LOCAL_READ_ANNOTATIONS,
       inputSchema: {
         query: z.string().optional().describe("Substring or exact name of the flag to search for."),
         kind: z
@@ -929,6 +1144,7 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
         };
       } catch (error) {
         return {
+          isError: true,
           content: [
             {
               type: "text" as const,
@@ -959,17 +1175,17 @@ export function createServer(options: CreateServerOptions = {}): ServerInstance 
     }),
   );
 
-  if (options.autoStartScheduler !== false) {
+  if (options.autoStartScheduler !== false && ownsScheduler) {
     scheduler.start();
     // Defer startup so the MCP initialize handshake is never blocked. Restore
     // persisted/cli seed progress and detect warm on-disk cache before scheduling.
     setImmediate(() => {
-      const getDb = createEmbeddingIndexer(store)
+      const getDb = embeddingIndexerAvailable
         ? () => (store as IKeyValueStore & { getDb(): import("better-sqlite3").Database }).getDb()
         : undefined;
 
       void (async () => {
-        if (!store.isOpen()) {
+        if (typeof store.isOpen === "function" && !store.isOpen()) {
           await store.open();
         }
         await seedManager.prepareStartup({ store, ...(getDb ? { getDb } : {}) });

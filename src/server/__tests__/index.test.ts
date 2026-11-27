@@ -82,6 +82,8 @@ const serverState = vi.hoisted(() => {
       get: ReturnType<typeof vi.fn>;
       put: ReturnType<typeof vi.fn>;
       del: ReturnType<typeof vi.fn>;
+      countByPrefix?: ReturnType<typeof vi.fn>;
+      getPath?: () => string;
     }>,
     syncManagers: [] as Array<{
       getSourceState: ReturnType<typeof vi.fn>;
@@ -139,6 +141,8 @@ vi.mock("../../store/index.js", () => {
     get = vi.fn(async () => null);
     put = vi.fn(async () => {});
     del = vi.fn(async () => {});
+    countByPrefix = vi.fn(async () => 0);
+    getPath = () => "/tmp/rodocsmcp/store.db";
 
     constructor() {
       serverState.stores.push(this);
@@ -266,6 +270,7 @@ describe("server", () => {
       "find_api_name",
       "search_guides",
       "roblox_search",
+      "rodocs_status",
       "roblox_devforum",
       "get_guide",
       "list_guides",
@@ -546,7 +551,7 @@ describe("server", () => {
     expect(response?.isError).toBeUndefined();
     expect(payload.results).toEqual([]);
     expect(payload.warming).toBe(true);
-    expect(payload.hint).toContain("--seed-devforum");
+    expect(payload.hint).toContain("rodocs seed devforum");
     expect(serverState.seedManagers[0]?.prioritize).toHaveBeenCalledWith("devforum");
   });
 
@@ -590,7 +595,183 @@ describe("server", () => {
 
     expect(payload.results).toEqual([]);
     expect(payload.warming).toBe(true);
-    expect(payload.hint).toContain("--seed-fastflags");
+    expect(payload.hint).toContain("rodocs seed fastflags");
     expect(serverState.seedManagers[0]?.prioritize).toHaveBeenCalledWith("fastflags");
+  });
+
+  it("reports cache and seed state through rodocs_status", async () => {
+    const { createServer } = await loadServer();
+    const result = createServer({ autoStartScheduler: false }) as unknown as ServerInstance;
+    const server = result.server as unknown as MockServer;
+    const store = serverState.stores[0];
+    const syncManager = serverState.syncManagers[0];
+
+    store?.countByPrefix?.mockResolvedValueOnce(42).mockResolvedValueOnce(3);
+    syncManager?.getSourceState.mockImplementation(async (key: string) =>
+      key === "seed:fastflags"
+        ? {
+            lastSyncAt: 123,
+            metadata: {
+              seedProgress: { status: "complete" },
+              embeddingsComplete: true,
+              embeddingsCount: 42,
+            },
+          }
+        : null,
+    );
+
+    const response = (await server.tools.get("rodocs_status")?.handler({
+      source: "fastflags",
+    })) as { content: Array<{ text: string }> } | undefined;
+    const payload = JSON.parse(response?.content[0]?.text ?? "{}") as {
+      cachePath?: string;
+      sources?: Array<{
+        source: string;
+        records: number | null;
+        persistedStatus: string;
+        embeddingsComplete: boolean;
+      }>;
+    };
+
+    expect(payload.cachePath).toBe("/tmp/rodocsmcp/store.db");
+    expect(payload.sources?.[0]).toMatchObject({
+      source: "fastflags",
+      records: 42,
+      persistedStatus: "complete",
+      embeddingsComplete: true,
+    });
+  });
+
+  it("annotates all registered tools as read-only and idempotent", async () => {
+    const { createServer } = await loadServer();
+    const result = createServer({ autoStartScheduler: false }) as unknown as ServerInstance;
+    const server = result.server as unknown as MockServer;
+
+    for (const [name, entry] of server.tools) {
+      const schema = entry.schema as { annotations?: Record<string, unknown> };
+      expect(schema.annotations, `tool ${name} should declare annotations`).toMatchObject({
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+      });
+    }
+  });
+
+  it("supports memberFilter, memberKind, summaryOnly, and structured errors in get_api_reference", async () => {
+    const entry = createEntry("TweenService");
+    entry.class.ownMembers.methods.push(
+      {
+        name: "Create",
+        summary: "Creates a new Tween",
+        tags: [],
+        deprecationMessage: "",
+        isDeprecated: false,
+        inheritedFrom: "TweenService",
+        threadSafety: "Safe",
+        security: "None",
+      },
+      {
+        name: "GetValue",
+        summary: "Computes easing alpha",
+        tags: [],
+        deprecationMessage: "",
+        isDeprecated: false,
+        inheritedFrom: "TweenService",
+        threadSafety: "Safe",
+        security: "None",
+      },
+    );
+    entry.class.ownMembers.properties.push({
+      name: "ClassName",
+      summary: "Name of class",
+      tags: ["ReadOnly"],
+      deprecationMessage: "",
+      isDeprecated: false,
+      inheritedFrom: "TweenService",
+      threadSafety: "Safe",
+      security: "None",
+    });
+
+    serverState.scrapeTopic.mockResolvedValueOnce({ ok: true, topic: "TweenService", entry });
+    serverState.scrapeTopic.mockResolvedValueOnce({ ok: true, topic: "TweenService", entry });
+    serverState.scrapeTopic.mockRejectedValueOnce(new Error("Topic not found"));
+    serverState.search.mockResolvedValueOnce([{ type: "api", name: "TweenService", score: 90 }]);
+
+    const { createServer } = await loadServer();
+    const result = createServer({ autoStartScheduler: false }) as unknown as ServerInstance;
+    const server = result.server as unknown as MockServer;
+    const handler = server.tools.get("get_api_reference")?.handler;
+
+    const filtered = (await handler?.({
+      topic: "TweenService",
+      includeInherited: false,
+      memberFilter: "create",
+      memberKind: "method",
+    })) as { content: Array<{ text: string }> };
+    const filteredPayload = JSON.parse(filtered.content[0]?.text ?? "{}") as {
+      members: Array<{ name: string }>;
+    };
+    expect(filteredPayload.members.map((m) => m.name)).toEqual(["Create"]);
+
+    const summary = (await handler?.({
+      topic: "TweenService",
+      summaryOnly: true,
+    })) as { content: Array<{ text: string }> };
+    const summaryPayload = JSON.parse(summary.content[0]?.text ?? "{}") as {
+      members: unknown[];
+      codeSamples: unknown[];
+    };
+    expect(summaryPayload.members).toEqual([]);
+    expect(summaryPayload.codeSamples).toEqual([]);
+
+    const errored = (await handler?.({ topic: "TweenServic" })) as {
+      isError?: boolean;
+      content: Array<{ text: string }>;
+    };
+    expect(errored.isError).toBe(true);
+    expect(JSON.parse(errored.content[0]?.text ?? "{}")).toMatchObject({
+      error: "Topic not found",
+      suggestions: ["TweenService"],
+    });
+  });
+
+  it("filters list_api_names and list_guides by kind/category, prefix, and limit", async () => {
+    serverState.scrapeIndex.mockResolvedValue({
+      ok: true,
+      classes: ["TweenService", "TextLabel", "Part"],
+      datatypes: ["TweenInfo", "Vector3"],
+      enums: ["TweenStatus"],
+      globals: [],
+      libraries: [],
+    });
+    serverState.fetchGuideIndex.mockResolvedValue([
+      { path: "scripting/events.md", title: "Events", description: "", category: "scripting" },
+      { path: "scripting/data.md", title: "Data", description: "", category: "scripting" },
+      { path: "physics/joints.md", title: "Joints", description: "", category: "physics" },
+    ]);
+
+    const { createServer } = await loadServer();
+    const result = createServer({ autoStartScheduler: false }) as unknown as ServerInstance;
+    const server = result.server as unknown as MockServer;
+
+    const apiRes = (await server.tools.get("list_api_names")?.handler({
+      kind: "class",
+      prefix: "t",
+      limit: 1,
+    })) as { content: Array<{ text: string }> };
+    expect(JSON.parse(apiRes.content[0]?.text ?? "{}")).toEqual({
+      classes: ["TweenService"],
+      datatypes: [],
+      enums: [],
+      globals: [],
+      libraries: [],
+    });
+
+    const guideRes = (await server.tools.get("list_guides")?.handler({
+      category: "scripting",
+      prefix: "scripting/d",
+      limit: 5,
+    })) as { content: Array<{ text: string }> };
+    expect(JSON.parse(guideRes.content[0]?.text ?? "[]")).toHaveLength(1);
   });
 });
