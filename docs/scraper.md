@@ -48,7 +48,7 @@ results.forEach(res => {
 ---
 
 ## `scrapeIndex`
-Returns sorted lists of all class and enum names from the API dump.
+Returns sorted lists of all class, datatype, enum, global, and library names from the creator-docs reference tree.
 
 **Signature**
 ```ts
@@ -56,12 +56,13 @@ export async function scrapeIndex(): Promise<IndexResult>
 ```
 
 **Returns**
-- `IndexResult`: Object containing `classes` and `enums` string arrays.
+- `IndexResult`: Object containing `classes`, `datatypes`, `enums`, `globals`, and `libraries` string arrays.
 
 **Example**
 ```ts
 const index = await scrapeIndex();
 console.log(`Total classes: ${index.classes.length}`);
+console.log(`Total datatypes: ${index.datatypes.length}`);
 ```
 
 ---

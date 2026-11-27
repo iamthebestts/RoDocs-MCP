@@ -2,13 +2,51 @@
 
 The server can authenticate GitHub-backed fetches with `--github-token <token>` or `GITHUB_TOKEN` when started over stdio.
 
+## Tool Selection Guide
+
+Use this decision tree to pick the right tool:
+
+```
+"What's the API for X?"
+  → find_api_name (fuzzy match) → get_api_reference (exact lookup)
+
+"Show me a tutorial about X"
+  → search_guides → get_guide
+
+"Is X deprecated?"
+  → get_api_changelog
+
+"Compare X and Y"
+  → compare_api_members
+
+"Show me code examples for X"
+  → get_code_samples
+
+"Broad search across everything"
+  → roblox_search (multi-source)
+
+"Are results incomplete or is cache seeded?"
+  -> rodocs_status
+
+"What FastFlags exist for X?"
+  → roblox_fastflags
+
+"How did people solve X?"
+  → roblox_devforum (community patterns)
+```
+
+---
+
 ## `get_api_reference`
-Returns full API documentation for a single Roblox class, enum, datatype, library or global.
+Returns API documentation for a single Roblox class, enum, datatype, library or global. Returns `isError: true` with closest `suggestions` when a topic is not found.
 
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
 | `topic` | `string` | Yes | Exact topic name, case-sensitive. E.g.: Actor, TweenService. |
 | `includeInherited` | `boolean` | No | Includes members inherited from parent classes. Default: `false`. |
+| `memberFilter` | `string` | No | Case-insensitive substring filter on member name or summary. |
+| `memberKind` | `string` | No | Filter members by kind: `"property"`, `"method"`, `"event"`, or `"callback"`. |
+| `summaryOnly` | `boolean` | No | Omits `members` and `codeSamples` for a compact overview. Default: `false`. |
 
 **Example Response**
 ```json
@@ -52,28 +90,33 @@ Fetches API references for up to 20 Roblox topics in one call.
   {
     "ok": false,
     "topic": "InvalidName",
-    "error": "Topic \"InvalidName\" not found on Creator Hub."
+    "error": "Topic \"InvalidName\" not found in creator-docs reference."
   }
 ]
 ```
 
 ## `list_api_names`
-Returns a flat list of all Roblox class names and enum names.
+Returns Roblox API names grouped by class, datatype, enum, global, and library.
 
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
-| N/A | N/A | No | No input required. |
+| `kind` | `string` | No | Filter to one kind: `"class"`, `"datatype"`, `"enum"`, `"global"`, or `"library"`. |
+| `prefix` | `string` | No | Case-insensitive name prefix filter. |
+| `limit` | `number` | No | Maximum names per group (1–5000). |
 
 **Example Response**
 ```json
 {
   "classes": ["Actor", "BasePart", "Instance", "..."],
-  "enums": ["Enum.Material", "Enum.KeyCode", "..."]
+  "datatypes": ["Vector3", "CFrame", "..."],
+  "enums": ["Material", "KeyCode", "..."],
+  "globals": ["task", "..."],
+  "libraries": ["buffer", "..."]
 }
 ```
 
 ## `find_api_name`
-BM25-searches all known class and enum names for the closest match to a query. Resolves common aliases (e.g., 'datastore').
+BM25-searches known API names for the closest match to a query. Resolves common aliases (e.g., 'datastore'). Returns the best match plus up to 4 runner-up candidates with confidence scores.
 
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
@@ -83,7 +126,12 @@ BM25-searches all known class and enum names for the closest match to a query. R
 ```json
 {
   "found": true,
-  "match": "TweenService"
+  "match": "TweenService",
+  "confidence": 1,
+  "candidates": [
+    { "name": "TweenBase", "score": 8.2 },
+    { "name": "Tween", "score": 6.1 }
+  ]
 }
 ```
 
@@ -93,6 +141,7 @@ BM25-searches the Roblox creator-docs repository for guides, tutorials and docum
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
 | `query` | `string` | Yes | Free-text search query. E.g.: "tweening", "physics constraints". |
+| `limit` | `number` | No | Maximum results (1–50). Default: 10. |
 
 **Example Response**
 ```json
@@ -121,11 +170,13 @@ TweenService is used to interpolate...
 ```
 
 ## `list_guides`
-Returns the full index of all Roblox creator guide paths and their categories.
+Returns the index of Roblox creator guide paths and their categories.
 
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
-| N/A | N/A | No | No input required. |
+| `category` | `string` | No | Case-insensitive category filter (e.g. `"scripting"`, `"physics"`). |
+| `prefix` | `string` | No | Case-insensitive path prefix filter. |
+| `limit` | `number` | No | Maximum guide entries to return (1–5000). |
 
 **Example Response**
 ```json
@@ -138,7 +189,7 @@ Returns the full index of all Roblox creator guide paths and their categories.
 ```
 
 ## `get_code_samples`
-Returns only the code samples for a Roblox API topic.
+Returns code sample metadata for a Roblox API topic.
 
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
@@ -152,7 +203,7 @@ Returns only the code samples for a Roblox API topic.
     "displayName": "Create Tween",
     "description": "Basic TweenService example",
     "language": "luau",
-    "code": "local TweenService = game:GetService(\"TweenService\")"
+    "code": ""
   }
 ]
 ```
@@ -199,6 +250,123 @@ Returns deprecation and notable tag metadata for a Roblox API topic.
 }
 ```
 
+## `roblox_search`
+Unified cross-source search across docs, guides, FastFlags, and DevForum. Results grouped by source.
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `query` | `string` | Yes | Free-text query. E.g.: "data store", "FFlagDebug". |
+| `source` | `string` | No | `"all"` (default), `"docs"`, `"guides"`, `"fastflags"`, or `"devforum"`. |
+| `limit` | `number` | No | Max results per source (1–50). Default: 10. |
+
+**Example Response**
+```json
+{
+  "query": "data store",
+  "source": "all",
+  "limit": 10,
+  "results": {
+    "docs": [{ "name": "DataStoreService", "score": 15.2, "category": "class" }],
+    "guides": [{ "name": "scripting/data/data-stores.md", "title": "Data Stores", "score": 12.1 }],
+    "fastflags": [],
+    "devforum": [{ "title": "Best practices for DataStore", "url": "...", "score": 9.0 }]
+  }
+}
+```
+
+When sources are still warming up, the response includes:
+```json
+{
+  "warming": true,
+  "hints": { "fastflags": "This source is still warming up..." },
+  "progress": { "fastflags": { "status": "running", "processed": 3, "total": 12 } }
+}
+```
+
+## `rodocs_status`
+Reports local RoDocs cache, seed progress, record counts, vector counts, and warming hints.
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `source` | `string` | No | `"all"` (default), `"docs"`, `"guides"`, `"fastflags"`, or `"devforum"`. |
+
+**Example Response**
+```json
+{
+  "cachePath": "/home/me/.cache/rodocsmcp/store.db",
+  "githubTokenConfigured": true,
+  "sources": [
+    {
+      "source": "fastflags",
+      "persistedStatus": "complete",
+      "records": 24993,
+      "vectors": null,
+      "embeddingsComplete": false,
+      "hint": "Run `rodocs seed fastflags --no-embed` for immediate full seed."
+    }
+  ]
+}
+```
+
+## `roblox_devforum`
+Searches locally seeded curated DevForum technical records for community solutions and patterns.
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `query` | `string` | Yes | Technical query. |
+| `tags` | `string[]` | No | Required DevForum tags. Common: "scripting", "building", "animation". |
+| `requireAcceptedAnswer` | `boolean` | No | Only topics with accepted answers. Default: `false`. |
+| `requireStaffReply` | `boolean` | No | Only topics with staff replies. Default: `false`. |
+| `minScore` | `number` | No | Minimum quality score (0–100). Default: 60. |
+| `limit` | `number` | No | Max results (1–25). Default: 10. |
+
+**Example Response**
+```json
+{
+  "query": "remote events best practices",
+  "results": [
+    {
+      "title": "RemoteEvent Security Best Practices",
+      "url": "https://devforum.roblox.com/t/...",
+      "tags": ["scripting", "networking"],
+      "score": 85,
+      "codeSnippets": ["..."],
+      "updatedAt": "2025-03-15"
+    }
+  ]
+}
+```
+
+## `roblox_fastflags`
+Searches Roblox FastFlags (FFlags) in the local store (source: MaximumADHD).
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `query` | `string` | No | Substring or exact flag name. |
+| `kind` | `string` | No | `"FFlag"`, `"FInt"`, `"FString"`, `"FLog"`, `"FBoolean"`, or `"Unknown"`. |
+| `behavior` | `string` | No | `"Fast"`, `"Dynamic"`, `"Synchronized"`, or `"Unknown"`. |
+| `platform` | `string` | No | Platform filter: "Windows", "Mac", "iOS", "Android", "XBox", "Studio". |
+| `limit` | `number` | No | Max results (1–100). Default: 50. |
+
+**Example Response**
+```json
+[
+  {
+    "name": "FFlagDebugDisplayFPS",
+    "value": "true",
+    "kind": "FFlag",
+    "behavior": "Fast",
+    "platforms": ["Windows", "Mac"],
+    "source": "MaximumADHD"
+  }
+]
+```
+
 ## Prompt
 
-The server also registers the `roblox-dev-assistant` prompt, which instructs MCP clients to prefer the intended RoDocs lookup flow for API names, references, guides, comparisons, and deprecation checks.
+The server registers the `roblox-dev-assistant` prompt, which instructs MCP clients to follow the recommended lookup workflow:
+1. Verify API name with `find_api_name`
+2. Fetch reference with `get_api_reference`
+3. Check deprecation with `get_api_changelog`
+4. Use `search_guides` → `get_guide` for tutorials
+5. Use `compare_api_members` for differences

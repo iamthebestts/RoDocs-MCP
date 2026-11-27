@@ -30,6 +30,7 @@ vi.mock("../fetch.js", () => ({
   getEngineVersionHash: fsState.getEngineVersionHash,
 }));
 
+import { _setLogEventSinkForTesting, type LogEvent } from "../../utils/logger.js";
 import { DiskCache } from "../disk-cache.js";
 
 function cacheDir(): string {
@@ -42,13 +43,18 @@ function cachePath(topic: string): string {
 }
 
 describe("DiskCache", () => {
+  let captured: LogEvent[];
+
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    captured = [];
+    _setLogEventSinkForTesting((e) => captured.push(e));
   });
 
   afterEach(() => {
+    _setLogEventSinkForTesting(null);
     vi.useRealTimers();
   });
 
@@ -118,5 +124,75 @@ describe("DiskCache", () => {
     await expect(
       cache.set("DataStoreService", { name: "DataStoreService" }),
     ).resolves.toBeUndefined();
+  });
+
+  describe("observability", () => {
+    it("emits cache.hit on a successful read", async () => {
+      const cache = new DiskCache<{ name: string }>();
+      const entry = { value: { name: "DataStoreService" }, expiresAt: Date.now() + 1000 };
+      fsState.readFile.mockResolvedValue(JSON.stringify(entry));
+
+      await cache.get("DataStoreService");
+
+      expect(captured).toHaveLength(1);
+      expect(captured[0]).toMatchObject({
+        event: "cache.hit",
+        source: "disk",
+        hit: true,
+        key: "DataStoreService",
+      });
+      expect(typeof captured[0]?.durationMs).toBe("number");
+    });
+
+    it("emits cache.miss when read fails", async () => {
+      const cache = new DiskCache<{ name: string }>();
+      fsState.readFile.mockRejectedValue(new Error("missing"));
+
+      await cache.get("DataStoreService");
+
+      expect(captured).toHaveLength(1);
+      expect(captured[0]).toMatchObject({
+        event: "cache.miss",
+        source: "disk",
+        key: "DataStoreService",
+      });
+      expect(typeof captured[0]?.durationMs).toBe("number");
+    });
+
+    it("emits cache.miss for expired entries", async () => {
+      const cache = new DiskCache<{ name: string }>();
+      const entry = { value: { name: "DataStoreService" }, expiresAt: Date.now() - 1 };
+      fsState.readFile.mockResolvedValue(JSON.stringify(entry));
+      fsState.unlink.mockResolvedValue(undefined);
+
+      await cache.get("DataStoreService");
+
+      expect(captured[0]).toMatchObject({ event: "cache.miss", source: "disk" });
+    });
+
+    it("emits cache.write after a successful set", async () => {
+      const cache = new DiskCache<{ name: string }>();
+      fsState.mkdir.mockResolvedValue(undefined);
+      fsState.writeFile.mockResolvedValue(undefined);
+
+      await cache.set("DataStoreService", { name: "DataStoreService" });
+
+      expect(captured).toHaveLength(1);
+      expect(captured[0]).toMatchObject({
+        event: "cache.write",
+        source: "disk",
+        key: "DataStoreService",
+      });
+    });
+
+    it("does not emit cache.write when the write fails", async () => {
+      const cache = new DiskCache<{ name: string }>();
+      fsState.mkdir.mockResolvedValue(undefined);
+      fsState.writeFile.mockRejectedValue(new Error("disk full"));
+
+      await cache.set("DataStoreService", { name: "DataStoreService" });
+
+      expect(captured.some((e) => e.event === "cache.write")).toBe(false);
+    });
   });
 });

@@ -1,4 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import type { RobloxDocEntry } from "../fetch.js";
+import { fetchGitHubTree } from "../tree.js";
+import { parseYamlToDocEntry } from "../yaml-parser.js";
 
 const axiosState = vi.hoisted(() => {
   const state = {
@@ -14,6 +17,14 @@ const axiosState = vi.hoisted(() => {
   return state;
 });
 
+vi.mock("../yaml-parser.js", () => ({
+  parseYamlToDocEntry: vi.fn(),
+}));
+
+vi.mock("../tree.js", () => ({
+  fetchGitHubTree: vi.fn(),
+}));
+
 vi.mock("axios", () => ({
   default: {
     create: axiosState.create,
@@ -22,6 +33,10 @@ vi.mock("axios", () => ({
   create: axiosState.create,
   isAxiosError: axiosState.isAxiosError,
 }));
+
+async function loadFetch() {
+  return import("../fetch.js");
+}
 
 function makeAxiosError(status: number): {
   isAxiosError: true;
@@ -35,226 +50,147 @@ function makeAxiosError(status: number): {
   };
 }
 
-function nextDataHtml(data: unknown): string {
-  return `<html><head></head><body><script id="__NEXT_DATA__" type="application/json">${JSON.stringify(data)}</script></body></html>`;
-}
-
-async function loadFetch() {
-  return import("../fetch.js");
+function createEntry(name: string): RobloxDocEntry {
+  return {
+    class: {
+      name,
+      summary: "Summary",
+      description: "Description",
+      inherits: [],
+      descendants: [],
+      tags: [],
+      deprecationMessage: "",
+      codeSamples: [],
+      ownMembers: {
+        properties: [],
+        methods: [],
+        events: [],
+        callbacks: [],
+      },
+    },
+    inheritedMembers: [],
+  };
 }
 
 describe("fetch", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.resetModules();
+    axiosState.get.mockReset();
+    axiosState.create.mockClear();
+    axiosState.isAxiosError.mockClear();
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("fetchIndex sorts entries and caches the api dump hash", async () => {
-    axiosState.get.mockResolvedValueOnce({
-      data: {
-        Classes: [{ Name: "Zed" }, { Name: "" }, { Name: "Alpha" }],
-        Enums: [{ Name: "RunContext" }, { Name: "" }],
-      },
-      headers: { etag: '"abc"' },
+  it("fetchIndex calls Tree API and sorts entries", async () => {
+    (fetchGitHubTree as Mock).mockResolvedValue({
+      entries: [
+        { path: "content/en-us/reference/engine/classes/Alpha.yaml" },
+        { path: "content/en-us/reference/engine/classes/Zed.yaml" },
+        { path: "content/en-us/reference/engine/enums/RunContext.yaml" },
+        { path: "content/en-us/reference/engine/README.md" },
+      ],
+      sha: "abc",
     });
 
     const { fetchIndex, getEngineVersionHash } = await loadFetch();
 
     await expect(fetchIndex()).resolves.toEqual({
       classes: ["Alpha", "Zed"],
+      datatypes: [],
       enums: ["RunContext"],
+      globals: [],
+      libraries: [],
     });
-    expect(getEngineVersionHash()).toBe('"abc"');
-
-    await expect(fetchIndex()).resolves.toEqual({
-      classes: ["Alpha", "Zed"],
-      enums: ["RunContext"],
-    });
-    expect(axiosState.get).toHaveBeenCalledTimes(1);
+    expect(getEngineVersionHash()).toBe("abc");
   });
 
-  it("adds an Authorization header to GitHub dump requests when a token is provided", async () => {
-    axiosState.get.mockResolvedValueOnce({
-      data: {
-        Classes: [],
-        Enums: [],
-      },
-      headers: {},
+  it("fetchTopic loads creator-docs YAML with GitHub auth headers", async () => {
+    (fetchGitHubTree as Mock).mockResolvedValue({
+      entries: [{ path: "content/en-us/reference/engine/classes/Actor.yaml" }],
+      sha: "abc",
     });
+    axiosState.get.mockResolvedValue({ data: "name: Actor" });
+    (parseYamlToDocEntry as Mock).mockReturnValue(createEntry("Actor"));
 
-    const { fetchIndex } = await loadFetch();
+    const { fetchIndex, fetchTopic } = await loadFetch();
     await fetchIndex("pat-123");
 
+    await expect(fetchTopic("Actor", "pat-123")).resolves.toMatchObject({
+      class: { name: "Actor" },
+    });
     expect(axiosState.get).toHaveBeenCalledWith(
-      "https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/roblox/Mini-API-Dump.json",
+      "https://raw.githubusercontent.com/Roblox/creator-docs/main/content/en-us/reference/engine/classes/Actor.yaml",
       {
         headers: {
+          Accept: "text/plain",
           Authorization: "Bearer pat-123",
         },
       },
     );
+    expect(parseYamlToDocEntry).toHaveBeenCalledWith("name: Actor");
   });
 
-  it("wraps api dump failures", async () => {
-    axiosState.get.mockRejectedValueOnce(new Error("boom"));
-
-    const { fetchIndex } = await loadFetch();
-
-    await expect(fetchIndex()).rejects.toThrow("Failed to load API dump: boom");
-  });
-
-  it("fetchTopic flattens creator hub data", async () => {
-    const html = nextDataHtml({
-      props: {
-        pageProps: {
-          data: {
-            apiReference: {
-              name: "SomeTopic",
-              summary: "  Some  summary\ntext  ",
-              description: "  Some description  ",
-              inherits: ["BaseClass"],
-              descendants: ["ChildClass"],
-              tags: ["Deprecated"],
-              deprecationMessage: "Use AnotherTopic",
-              codeSamples: [
-                {
-                  identifier: "sample",
-                  displayName: "Sample",
-                  description: "Example",
-                  codeSample:
-                    'local value = game:GetService(\\"Players\\")\\\\nprint(\\"hi\\")\\\\tend',
-                },
-              ],
-              properties: [
-                {
-                  name: "Enabled",
-                  summary: "  Property summary  ",
-                  type: { Name: "boolean" },
-                  tags: ["ReadOnly"],
-                  deprecationMessage: "",
-                  threadSafety: "Safe",
-                  security: { Name: "PluginSecurity" },
-                },
-              ],
-              methods: [
-                {
-                  name: "DoThing",
-                  summary: "  Method summary  ",
-                  type: { name: "void" },
-                  parameters: [
-                    { Name: "count", Type: { Name: "number" }, Default: "1" },
-                    { name: "player", type: "Player" },
-                  ],
-                  returns: [{ Type: { Name: "string" } }],
-                  tags: ["Deprecated"],
-                  deprecationMessage: "Deprecated",
-                  threadSafety: "Unsafe",
-                  security: { Name: "RobloxScriptSecurity" },
-                },
-              ],
-              events: [
-                {
-                  name: "Changed",
-                  summary: " Event summary ",
-                  tags: [],
-                  threadSafety: "Unsafe",
-                  security: { Name: "None" },
-                },
-              ],
-              callbacks: [
-                {
-                  name: "Callback",
-                  summary: " Callback summary ",
-                  parameters: [{ name: "x", type: "number" }],
-                  returns: [{ type: { Name: "boolean" } }],
-                  tags: [],
-                  threadSafety: "Safe",
-                  security: null,
-                },
-              ],
-            },
-            classReferenceParents: [
-              {
-                name: "ParentClass",
-                properties: [
-                  {
-                    name: "ParentProperty",
-                    summary: " inherited ",
-                    type: "string",
-                    tags: [],
-                    threadSafety: "Safe",
-                    security: "None",
-                  },
-                ],
-                methods: [
-                  {
-                    name: "ParentMethod",
-                    summary: " inherited method ",
-                    type: "function",
-                    parameters: [],
-                    returns: [],
-                    tags: [],
-                    deprecationMessage: "",
-                    threadSafety: "Safe",
-                    security: "None",
-                  },
-                ],
-                events: [],
-                callbacks: [],
-              },
-            ],
-          },
-        },
-      },
-    });
-
+  it("fetchTopic probes categories until YAML is found", async () => {
     axiosState.get.mockImplementation((url: string) => {
-      if (url.includes("/classes/SomeTopic")) {
-        return Promise.resolve({ data: html });
+      if (url.includes("/classes/Vector3.yaml")) {
+        return Promise.reject(makeAxiosError(404));
       }
-
+      if (url.includes("/datatypes/Vector3.yaml")) {
+        return Promise.resolve({ data: "name: Vector3" });
+      }
       return Promise.reject(makeAxiosError(404));
     });
+    (parseYamlToDocEntry as Mock).mockReturnValue(createEntry("Vector3"));
 
     const { fetchTopic } = await loadFetch();
-    const entry = await fetchTopic("SomeTopic");
 
-    expect(entry.class.name).toBe("SomeTopic");
-    expect(entry.class.summary).toBe("Some summary text");
-    expect(entry.class.description).toBe("Some description");
-    expect(entry.class.inherits).toEqual(["BaseClass"]);
-    expect(entry.class.descendants).toEqual(["ChildClass"]);
-    expect(entry.class.tags).toEqual(["Deprecated"]);
-    expect(entry.class.deprecationMessage).toBe("Use AnotherTopic");
-    expect(entry.class.codeSamples[0]?.language).toBe("luau");
-    expect(entry.class.codeSamples[0]?.code).toContain("\n");
-    expect(entry.class.ownMembers.properties[0]?.type).toBe("boolean");
-    expect(entry.class.ownMembers.properties[0]?.security).toBe("PluginSecurity");
-    expect(entry.class.ownMembers.methods[0]?.parameters?.[0]).toEqual({
-      name: "count",
-      type: "number",
-      default: "1",
+    await expect(fetchTopic("Vector3")).resolves.toMatchObject({
+      class: { name: "Vector3" },
     });
-    expect(entry.class.ownMembers.methods[0]?.returns).toBe("string");
-    expect(entry.class.ownMembers.methods[0]?.isDeprecated).toBe(true);
-    expect(entry.class.ownMembers.methods[0]?.security).toBe("RobloxScriptSecurity");
-    expect(entry.class.ownMembers.events[0]?.security).toBe("None");
-    expect(entry.class.ownMembers.callbacks[0]?.security).toBeNull();
-    expect(entry.inheritedMembers[0]?.fromClass).toBe("ParentClass");
-    expect(entry.inheritedMembers[0]?.methods[0]?.inheritedFrom).toBe("ParentClass");
+    expect(axiosState.get).toHaveBeenCalledTimes(2);
   });
 
-  it("throws when a topic does not exist", async () => {
+  it("fetchTopic rebuilds inherited member groups from parent YAML", async () => {
+    const child = createEntry("Actor");
+    child.class.inherits = ["Instance"];
+    const parent = createEntry("Instance");
+    parent.class.ownMembers.methods.push({
+      name: "Destroy",
+      summary: "Destroys the instance",
+      tags: [],
+      deprecationMessage: "",
+      isDeprecated: false,
+      inheritedFrom: "",
+      threadSafety: "Unsafe",
+      security: null,
+    });
+
+    axiosState.get
+      .mockResolvedValueOnce({ data: "name: Actor" })
+      .mockResolvedValueOnce({ data: "name: Instance" });
+    (parseYamlToDocEntry as Mock).mockReturnValueOnce(child).mockReturnValueOnce(parent);
+
+    const { fetchTopic } = await loadFetch();
+
+    const entry = await fetchTopic("Actor");
+    expect(entry.inheritedMembers[0]?.fromClass).toBe("Instance");
+    expect(entry.inheritedMembers[0]?.methods[0]).toMatchObject({
+      name: "Destroy",
+      inheritedFrom: "Instance",
+    });
+  });
+
+  it("fetchTopic reports a clear error when all categories 404", async () => {
     axiosState.get.mockRejectedValue(makeAxiosError(404));
 
     const { fetchTopic } = await loadFetch();
 
     await expect(fetchTopic("MissingTopic")).rejects.toThrow(
-      'Topic "MissingTopic" not found on Creator Hub.',
+      'Topic "MissingTopic" not found in creator-docs reference.',
     );
   });
 

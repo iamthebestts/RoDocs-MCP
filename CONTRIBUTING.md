@@ -22,7 +22,9 @@ src/
 │   └── index.ts           # MCP server and tool registration
 ├── scraper/
 │   ├── index.ts           # Public API, orchestration, caching
-│   ├── fetch.ts           # API reference scraper (Creator Hub)
+│   ├── fetch.ts           # API reference fetcher (creator-docs YAML)
+│   ├── tree.ts            # GitHub tree discovery for creator-docs
+│   ├── yaml-parser.ts     # YAML-to-doc-entry normalization
 │   ├── guides.ts          # Guides fetching and indexing
 │   ├── search.ts          # Unified search layer (API + guides)
 │   ├── bm25.ts            # BM25 ranking implementation

@@ -6,6 +6,7 @@ import type {
   RobloxEnum,
   RobloxGlobal,
   RobloxIndexEntry,
+  RobloxLibrary,
   RobloxMemberType,
   RobloxSecurity,
   SearchOptions,
@@ -25,7 +26,9 @@ describe("types", () => {
       | "RobloxSecurity"
       | "NotAccessibleSecurity"
     >();
-    expectTypeOf<RobloxIndexEntry["kind"]>().toEqualTypeOf<"class" | "enum">();
+    expectTypeOf<RobloxIndexEntry["kind"]>().toEqualTypeOf<
+      "class" | "datatype" | "enum" | "global" | "library"
+    >();
     expectTypeOf<SearchResult["type"]>().toEqualTypeOf<"api" | "guide">();
   });
 
@@ -36,7 +39,7 @@ describe("types", () => {
     }>();
 
     expectTypeOf<RobloxApiEntry>().toEqualTypeOf<
-      RobloxClass | RobloxEnum | RobloxDatatype | RobloxGlobal
+      RobloxClass | RobloxEnum | RobloxDatatype | RobloxGlobal | RobloxLibrary
     >();
   });
 });

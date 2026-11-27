@@ -1,0 +1,614 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { _setLogEventSinkForTesting, type LogEvent } from "../../utils/logger.js";
+
+const mockFetchIndex = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({
+    classes: [
+      "MemoryStoreService",
+      "MemoryStoreQueue",
+      "MemoryStoreHashMap",
+      "DataStoreService",
+      "DataStore",
+      "PathfindingService",
+      "TweenService",
+      "RemoteEvent",
+      "RunService",
+      "Player",
+    ],
+    enums: ["TweenStatus", "RunContext"],
+  }),
+);
+
+const mockFetchGuideIndex = vi.hoisted(() =>
+  vi.fn().mockResolvedValue([
+    {
+      path: "cloud-services/data-stores/save-player-data.md",
+      title: "Save Player Data",
+      description: "How to persist and save player data using DataStore",
+      category: "cloud-services",
+    },
+    {
+      path: "cloud-services/data-stores/index.md",
+      title: "Data Stores Overview",
+      description: "Overview of data store features for saving player data",
+      category: "cloud-services",
+    },
+    {
+      path: "cloud-services/data-stores/player-data-purchasing.md",
+      title: "Player Data and Purchasing",
+      description: "Managing player data alongside in-experience purchases",
+      category: "cloud-services",
+    },
+    {
+      path: "scripting/events/remote.md",
+      title: "Remote Events",
+      description: "How to use remote events for client server communication",
+      category: "scripting",
+    },
+    {
+      path: "scripting/events/bindable.md",
+      title: "Bindable Events",
+      description: "How to use bindable events for server to server communication",
+      category: "scripting",
+    },
+    {
+      path: "production/creator-store.md",
+      title: "Creator Store",
+      description: "Publishing assets to the creator store marketplace",
+      category: "production",
+    },
+    {
+      path: "tutorials/use-case-tutorials/data-storage/index.md",
+      title: "Data Storage Tutorials",
+      description: "Tutorials for saving and loading player data",
+      category: "tutorials",
+    },
+  ]),
+);
+
+vi.mock("../../scraper/fetch.js", () => ({
+  fetchIndex: mockFetchIndex,
+  fetchTopic: vi.fn(),
+  findClosestMatch: vi.fn(),
+}));
+
+vi.mock("../../scraper/guides.js", () => ({
+  fetchGuideIndex: mockFetchGuideIndex,
+  fetchGuide: vi.fn(),
+  searchGuides: vi.fn(),
+}));
+
+import type { Indexer } from "../../store/indexer.js";
+import { BM25 } from "../bm25.js";
+import {
+  _resetIndexesForTesting,
+  ensureApiIndex,
+  ensureGuideIndex,
+  initIndexer,
+  search,
+  searchApis,
+  searchApisLocal,
+  searchGuides,
+  searchGuidesLocal,
+  sortByRecency,
+  warmUp,
+} from "../index.js";
+
+function initMissingPersistedIndexer() {
+  initIndexer({ getPath: () => "C:/tmp/rodocs-missing-store/store.db" } as never, {} as never);
+}
+
+describe("search", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetIndexesForTesting();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  describe("alias layer (layer 1)", () => {
+    it("alias hit returns score 100 in first position", async () => {
+      const results = await search("memory store", { limit: 5 });
+      const first = results[0];
+      expect(first?.score).toBe(100);
+      expect(first?.name).toBe("MemoryStoreService");
+    });
+
+    it("alias hit type is 'api'", async () => {
+      const results = await search("datastore", { limit: 3 });
+      const aliasResult = results.find((r) => r.name === "DataStoreService");
+      expect(aliasResult?.type).toBe("api");
+    });
+
+    it("alias result is not duplicated by BM25 layer", async () => {
+      const results = await search("memory store", { limit: 10 });
+      const names = results.map((r) => r.name);
+      const unique = [...new Set(names)];
+      expect(names).toEqual(unique);
+    });
+  });
+
+  describe("BM25 API layer (layer 2)", () => {
+    it("returns api results for known class name", async () => {
+      const results = await search("TweenService", { limit: 5 });
+      const types = results.map((r) => r.type);
+      expect(types).toContain("api");
+    });
+
+    it("filters by types option api only", async () => {
+      const results = await search("data store", { limit: 10, types: ["api"] });
+      for (const r of results) {
+        expect(r.type).toBe("api");
+      }
+    });
+
+    it("expands aliases before BM25 search", async () => {
+      const results = await search("ds", { limit: 10, types: ["api"] });
+      const names = results.map((r) => r.name);
+
+      expect(names).toContain("DataStore");
+      expect(names).toContain("DataStoreService");
+      expect(names.length).toBeGreaterThan(1);
+    });
+
+    it("uses fuzzy fallback when BM25 returns no results", async () => {
+      const results = await search("PathfindngService", { limit: 5, types: ["api"] });
+
+      expect(results[0]?.name).toBe("PathfindingService");
+    });
+  });
+
+  describe("BM25 guide layer (layer 3)", () => {
+    beforeEach(() => {
+      _resetIndexesForTesting({ guideScoreThreshold: 0 });
+    });
+
+    it("returns guide results for natural language query", async () => {
+      const results = await searchGuides("save player data", 5);
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0]?.type).toBe("guide");
+      expect(results[0]?.path).toContain("data");
+    });
+
+    it("filters by types option guide only via searchGuides", async () => {
+      const results = await searchGuides("remote events scripting", 5);
+      for (const r of results) {
+        expect(r.type).toBe("guide");
+      }
+    });
+  });
+
+  describe("options", () => {
+    it("respects limit option", async () => {
+      const results = await search("data store service", { limit: 3 });
+      expect(results.length).toBeLessThanOrEqual(3);
+    });
+
+    it("uses default limit of 10 when not specified", async () => {
+      const results = await search("service");
+      expect(results.length).toBeLessThanOrEqual(10);
+    });
+
+    it("returns empty array for empty query", async () => {
+      const results = await search("", { limit: 5 });
+      expect(results).toEqual([]);
+    });
+  });
+
+  describe("result shape", () => {
+    it("every result has required fields", async () => {
+      const results = await search("DataStore", { limit: 5 });
+      for (const r of results) {
+        expect(typeof r.type).toBe("string");
+        expect(["api", "guide"]).toContain(r.type);
+        expect(typeof r.name).toBe("string");
+        expect(r.name.length).toBeGreaterThan(0);
+        expect(typeof r.score).toBe("number");
+        expect(r.score).toBeGreaterThan(0);
+      }
+    });
+
+    it("api results have path with class or enum prefix", async () => {
+      const results = await search("RunService", { limit: 3, types: ["api"] });
+      for (const r of results) {
+        if (r.type === "api") {
+          expect(r.path).toMatch(/^(classes|enums)\//);
+        }
+      }
+    });
+  });
+
+  describe("sorting", () => {
+    it("results are sorted by score descending", async () => {
+      const results = await search("data store", { limit: 10 });
+      for (let i = 0; i < results.length - 1; i++) {
+        const current = results[i];
+        const next = results[i + 1];
+        if (current !== undefined && next !== undefined) {
+          expect(current.score).toBeGreaterThanOrEqual(next.score);
+        }
+      }
+    });
+
+    it("can sort post-BM25 results with recency boost", () => {
+      const results = sortByRecency(
+        [
+          {
+            type: "guide",
+            name: "old",
+            score: 10,
+            ageDays: 365,
+          },
+          {
+            type: "guide",
+            name: "new",
+            score: 8,
+            ageDays: 0,
+          },
+        ],
+        { halfLifeDays: 365, minMultiplier: 0.1 },
+      );
+
+      expect(results[0]?.name).toBe("new");
+    });
+  });
+
+  describe("promise lock (no duplicate index builds)", () => {
+    it("calling search concurrently does not throw", async () => {
+      await expect(
+        Promise.all([
+          search("DataStore", { limit: 3 }),
+          search("TweenService", { limit: 3 }),
+          search("RemoteEvent", { limit: 3 }),
+        ]),
+      ).resolves.not.toThrow();
+    });
+  });
+
+  describe("warmUp", () => {
+    it("executes without throwing", () => {
+      expect(() => warmUp()).not.toThrow();
+    });
+  });
+
+  describe("ensureApiIndex / ensureGuideIndex (awaitable warmups)", () => {
+    it("resolves once the API index is built", async () => {
+      await expect(ensureApiIndex()).resolves.toBeUndefined();
+    });
+
+    it("resolves once the guide index is built", async () => {
+      await expect(ensureGuideIndex()).resolves.toBeUndefined();
+    });
+
+    it("rejects when the API index build fails", async () => {
+      mockFetchIndex.mockRejectedValueOnce(new Error("github down"));
+      await expect(ensureApiIndex()).rejects.toThrow("github down");
+    });
+
+    it("rejects when the guide index build fails", async () => {
+      mockFetchGuideIndex.mockRejectedValueOnce(new Error("guides down"));
+      await expect(ensureGuideIndex()).rejects.toThrow("guides down");
+    });
+  });
+});
+
+describe("initIndexer invalidation via onClear", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetIndexesForTesting();
+  });
+
+  it("rebuilds the API index after the shared indexer fires clear('api')", async () => {
+    const fakeIndexer = {
+      _store: {},
+      _syncManager: {},
+      onClear: vi.fn(),
+      load: vi.fn().mockResolvedValue(false),
+      save: vi.fn().mockResolvedValue(undefined),
+      loadOrBuildIndex: vi.fn().mockImplementation(async (_s, _b, builder) => {
+        await builder();
+      }),
+    } as unknown as Indexer;
+
+    // Capture the "api" callback registered by initIndexer
+    let apiClearCallback: (() => void) | undefined;
+    vi.mocked(fakeIndexer.onClear).mockImplementation((source, cb) => {
+      if (source === "api") apiClearCallback = cb;
+    });
+
+    initIndexer({} as never, {} as never, fakeIndexer);
+
+    // First search builds the index
+    await searchApis("TweenService", 3);
+    expect(mockFetchIndex).toHaveBeenCalledTimes(1);
+
+    // Simulated write: pipeline calls indexer.clear("api") which fires the callback
+    apiClearCallback?.();
+
+    // Next search must rebuild (fetch called again)
+    await searchApis("RunService", 3);
+    expect(mockFetchIndex).toHaveBeenCalledTimes(2);
+  });
+
+  it("rebuilds the guide index after the shared indexer fires clear('guides')", async () => {
+    const fakeIndexer = {
+      _store: {},
+      _syncManager: {},
+      onClear: vi.fn(),
+      load: vi.fn().mockResolvedValue(false),
+      save: vi.fn().mockResolvedValue(undefined),
+      loadOrBuildIndex: vi.fn().mockImplementation(async (_s, _b, builder) => {
+        await builder();
+      }),
+    } as unknown as Indexer;
+
+    let guidesClearCallback: (() => void) | undefined;
+    vi.mocked(fakeIndexer.onClear).mockImplementation((source, cb) => {
+      if (source === "guides") guidesClearCallback = cb;
+    });
+
+    initIndexer({} as never, {} as never, fakeIndexer);
+
+    await searchGuides("save player data", 3);
+    expect(mockFetchGuideIndex).toHaveBeenCalledTimes(1);
+
+    guidesClearCallback?.();
+
+    await searchGuides("remote events", 3);
+    expect(mockFetchGuideIndex).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("searchApis (direct)", () => {
+  beforeEach(() => {
+    _resetIndexesForTesting();
+    vi.clearAllMocks();
+  });
+
+  it("returns only api type results", async () => {
+    const results = await searchApis("RunService", 5);
+    for (const r of results) {
+      expect(r.type).toBe("api");
+    }
+  });
+
+  it("local search returns empty without fetching when the index is cold", async () => {
+    const results = await searchApisLocal("RunService", 5);
+
+    expect(results).toEqual([]);
+    expect(mockFetchIndex).not.toHaveBeenCalled();
+  });
+
+  it("local search checks persisted API indexes without building remotely", async () => {
+    initMissingPersistedIndexer();
+
+    const results = await searchApisLocal("RunService", 5);
+
+    expect(results).toEqual([]);
+    expect(mockFetchIndex).not.toHaveBeenCalled();
+  });
+
+  it("local search uses an already-built API index", async () => {
+    await searchApis("RunService", 5);
+    vi.clearAllMocks();
+
+    const results = await searchApisLocal("RunService", 5);
+
+    expect(results.some((r) => r.name === "RunService")).toBe(true);
+    expect(mockFetchIndex).not.toHaveBeenCalled();
+  });
+
+  describe("API search observability", () => {
+    const events: LogEvent[] = [];
+
+    beforeEach(() => {
+      events.length = 0;
+      _setLogEventSinkForTesting((e) => events.push(e));
+    });
+
+    afterEach(() => {
+      _setLogEventSinkForTesting(null);
+    });
+
+    it("emits search.query with source=api from searchApis()", async () => {
+      await searchApis("DataStore", 5);
+
+      const event = events.find((e) => e.event === "search.query" && e.source === "api");
+      expect(event).toMatchObject({ event: "search.query", source: "api" });
+      expect(typeof event?.durationMs).toBe("number");
+    });
+
+    it("emits exactly one search.query per searchApis() call", async () => {
+      await searchApis("DataStore", 5);
+
+      expect(events.filter((e) => e.event === "search.query" && e.source === "api")).toHaveLength(
+        1,
+      );
+    });
+
+    it("emits search.rebuild with source=api when building the API index for the first time", async () => {
+      await searchApis("DataStore", 5);
+
+      const event = events.find((e) => e.event === "search.rebuild" && e.source === "api");
+      expect(event).toMatchObject({ event: "search.rebuild", source: "api" });
+      expect(typeof event?.durationMs).toBe("number");
+    });
+
+    it("does not emit search.rebuild on second call (index cached)", async () => {
+      await searchApis("DataStore", 5);
+      events.length = 0;
+
+      await searchApis("RunService", 5);
+
+      expect(events.some((e) => e.event === "search.rebuild" && e.source === "api")).toBe(false);
+    });
+  });
+});
+
+describe("searchGuides (direct)", () => {
+  beforeEach(() => {
+    _resetIndexesForTesting();
+    vi.clearAllMocks();
+  });
+
+  it("returns only guide type results", async () => {
+    const results = await searchGuides("save player data", 5);
+    for (const r of results) {
+      expect(r.type).toBe("guide");
+    }
+  });
+
+  it("local search returns empty without fetching when the guide index is cold", async () => {
+    const results = await searchGuidesLocal("save player data", 5);
+
+    expect(results).toEqual([]);
+    expect(mockFetchGuideIndex).not.toHaveBeenCalled();
+  });
+
+  it("local search checks persisted guide indexes without building remotely", async () => {
+    initMissingPersistedIndexer();
+
+    const results = await searchGuidesLocal("save player data", 5);
+
+    expect(results).toEqual([]);
+    expect(mockFetchGuideIndex).not.toHaveBeenCalled();
+  });
+
+  it("local search uses an already-built guide index", async () => {
+    _resetIndexesForTesting({ guideScoreThreshold: 0 });
+    await searchGuides("save player data", 5);
+    vi.clearAllMocks();
+
+    const results = await searchGuidesLocal("save player data", 5);
+
+    expect(results.some((r) => r.type === "guide")).toBe(true);
+    expect(mockFetchGuideIndex).not.toHaveBeenCalled();
+  });
+
+  describe("score threshold", () => {
+    it("search() omits guide results below threshold", async () => {
+      const results = await search("save player data", { limit: 5 });
+      for (const r of results) {
+        expect(r.score).toBeGreaterThanOrEqual(5);
+      }
+    });
+  });
+
+  describe("guides search observability", () => {
+    const events: LogEvent[] = [];
+
+    beforeEach(() => {
+      events.length = 0;
+      _setLogEventSinkForTesting((e) => events.push(e));
+    });
+
+    afterEach(() => {
+      _setLogEventSinkForTesting(null);
+    });
+
+    it("emits search.query with source=guides from searchGuides()", async () => {
+      await searchGuides("data store", 5);
+
+      const event = events.find((e) => e.event === "search.query" && e.source === "guides");
+      expect(event).toMatchObject({ event: "search.query", source: "guides" });
+      expect(typeof event?.durationMs).toBe("number");
+    });
+
+    it("emits exactly one search.query per searchGuides() call", async () => {
+      await searchGuides("data store", 5);
+
+      expect(
+        events.filter((e) => e.event === "search.query" && e.source === "guides"),
+      ).toHaveLength(1);
+    });
+
+    it("emits search.rebuild with source=guides when building guide index for the first time", async () => {
+      await searchGuides("data store", 5);
+
+      const event = events.find((e) => e.event === "search.rebuild" && e.source === "guides");
+      expect(event).toMatchObject({ event: "search.rebuild", source: "guides" });
+      expect(typeof event?.durationMs).toBe("number");
+    });
+
+    it("does not emit search.rebuild on second call (guide index cached)", async () => {
+      await searchGuides("data store", 5);
+      events.length = 0;
+
+      await searchGuides("remote events", 5);
+
+      expect(events.some((e) => e.event === "search.rebuild" && e.source === "guides")).toBe(false);
+    });
+  });
+
+  describe("warm-cache BM25 metadata hydration", () => {
+    it("hydrates API categories and guide metadata when loaded from persisted BM25 index", async () => {
+      _resetIndexesForTesting({ guideScoreThreshold: 0 });
+
+      const persistedApi = new BM25();
+      persistedApi.index([
+        { id: "Vector3", fields: { title: "Vector3", path: "datatypes/Vector3" } },
+        { id: "KeyCode", fields: { title: "KeyCode", path: "enums/KeyCode" } },
+        { id: "task", fields: { title: "task", path: "libraries/task" } },
+      ]);
+      const serializedApi = persistedApi.serialize();
+
+      const persistedGuides = new BM25();
+      persistedGuides.index([
+        {
+          id: "scripting/data/data-stores.md",
+          fields: {
+            title: "Data Stores",
+            path: "scripting/data/data-stores.md",
+            description: "Persist player data across sessions",
+          },
+        },
+      ]);
+      const serializedGuides = persistedGuides.serialize();
+
+      const fakeIndexer = {
+        onClear: vi.fn(),
+        load: vi.fn(async (target: BM25, source: string) => {
+          if (source === "api") {
+            target.restore(serializedApi);
+            return true;
+          }
+          if (source === "guides") {
+            target.restore(serializedGuides);
+            return true;
+          }
+          return false;
+        }),
+      } as unknown as Indexer;
+
+      initIndexer({} as never, {} as never, fakeIndexer);
+
+      const apiHits = await searchApisLocal("Vector3", 5);
+      expect(apiHits[0]).toMatchObject({
+        name: "Vector3",
+        category: "datatype",
+        path: "datatypes/Vector3",
+        score: 100,
+      });
+
+      const guideHits = await searchGuidesLocal("data stores", 5);
+      expect(guideHits[0]).toMatchObject({
+        name: "scripting/data/data-stores.md",
+        title: "Data Stores",
+        description: "Persist player data across sessions",
+        category: "scripting",
+      });
+
+      expect(mockFetchIndex).not.toHaveBeenCalled();
+      expect(mockFetchGuideIndex).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("prefix fallback", () => {
+    it("resolves partial API prefixes like 'tweenserv' to 'TweenService'", async () => {
+      const results = await searchApis("tweenserv", 5);
+      expect(results[0]?.name).toBe("TweenService");
+    });
+  });
+});

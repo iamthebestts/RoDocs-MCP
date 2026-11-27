@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com), and this 
 ### Planned
 
 - Migrate API docs scraping to a faster, more performant approach using the `creator-docs` GitHub repository directly.
+- Add DevForum FastFlags pipeline for efficient flag parsing and caching using LMDB and msgpack.
 
 ## [2.0.0] - 2026-04-25
 

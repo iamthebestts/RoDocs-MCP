@@ -53,8 +53,6 @@ export function parseGithubTokenArgs(
     if (arg !== undefined) nextArgs.push(arg);
   }
 
-  return {
-    args: nextArgs,
-    githubToken: resolveGithubToken(githubToken, env) as string,
-  };
+  const resolved = resolveGithubToken(githubToken, env);
+  return resolved === undefined ? { args: nextArgs } : { args: nextArgs, githubToken: resolved };
 }

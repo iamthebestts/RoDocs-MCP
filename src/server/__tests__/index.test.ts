@@ -1,5 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RobloxDocEntry } from "../../scraper/fetch.js";
+import type { ServerInstance } from "../../server/index.js";
+
+interface MockServer {
+  options: unknown;
+  tools: Map<
+    string,
+    {
+      schema: unknown;
+      handler: (args: Record<string, unknown>) => Promise<unknown>;
+    }
+  >;
+  prompts: Map<
+    string,
+    {
+      schema: unknown;
+      handler: (args: Record<string, unknown>) => Promise<unknown>;
+    }
+  >;
+}
 
 const serverState = vi.hoisted(() => {
   class FakeMcpServer {
@@ -42,14 +61,41 @@ const serverState = vi.hoisted(() => {
 
   return {
     FakeMcpServer,
+    initIndexer: vi.fn(),
     warmUp: vi.fn(),
+    ensureApiIndex: vi.fn(async () => {}),
+    ensureGuideIndex: vi.fn(async () => {}),
     scrapeIndex: vi.fn(),
     scrapeMany: vi.fn(),
     scrapeTopic: vi.fn(),
     search: vi.fn(),
     searchGuides: vi.fn(),
+    robloxSearch: vi.fn(),
+    searchDevForumStore: vi.fn(),
+    fastFlagSearch: vi.fn(),
     fetchGuide: vi.fn(),
     fetchGuideIndex: vi.fn(),
+    stores: [] as Array<{
+      open: ReturnType<typeof vi.fn>;
+      close: ReturnType<typeof vi.fn>;
+      keys: ReturnType<typeof vi.fn>;
+      get: ReturnType<typeof vi.fn>;
+      put: ReturnType<typeof vi.fn>;
+      del: ReturnType<typeof vi.fn>;
+      countByPrefix?: ReturnType<typeof vi.fn>;
+      getPath?: () => string;
+    }>,
+    syncManagers: [] as Array<{
+      getSourceState: ReturnType<typeof vi.fn>;
+      updateSourceState: ReturnType<typeof vi.fn>;
+      needsSync: ReturnType<typeof vi.fn>;
+    }>,
+    seedManagers: [] as Array<{
+      startBackground: ReturnType<typeof vi.fn>;
+      stop: ReturnType<typeof vi.fn>;
+      prioritize: ReturnType<typeof vi.fn>;
+      getProgress: ReturnType<typeof vi.fn>;
+    }>,
   };
 });
 
@@ -68,11 +114,90 @@ vi.mock("../../scraper/guides.js", () => ({
   fetchGuideIndex: serverState.fetchGuideIndex,
 }));
 
-vi.mock("../../scraper/search.js", () => ({
+vi.mock("../../search/index.js", () => ({
+  initIndexer: serverState.initIndexer,
   search: serverState.search,
   searchGuides: serverState.searchGuides,
   warmUp: serverState.warmUp,
+  ensureApiIndex: serverState.ensureApiIndex,
+  ensureGuideIndex: serverState.ensureGuideIndex,
 }));
+
+vi.mock("../../search/roblox-search.js", () => ({
+  ROBLOX_SEARCH_SOURCES: ["all", "docs", "guides", "fastflags", "devforum"],
+  robloxSearch: serverState.robloxSearch,
+}));
+
+vi.mock("../../devforum/search.js", () => ({
+  searchDevForumStore: serverState.searchDevForumStore,
+  initDevForumSearch: vi.fn(),
+}));
+
+vi.mock("../../store/index.js", () => {
+  class FakeSqliteStore {
+    open = vi.fn(async () => {});
+    close = vi.fn();
+    keys = vi.fn(async () => []);
+    get = vi.fn(async () => null);
+    put = vi.fn(async () => {});
+    del = vi.fn(async () => {});
+    countByPrefix = vi.fn(async () => 0);
+    getPath = () => "/tmp/rodocsmcp/store.db";
+
+    constructor() {
+      serverState.stores.push(this);
+    }
+  }
+
+  class FakeIndexer {}
+
+  function createSyncStateManager() {
+    const syncManager = {
+      getSourceState: vi.fn(async () => null),
+      updateSourceState: vi.fn(async () => {}),
+      needsSync: vi.fn(async () => true),
+    };
+    serverState.syncManagers.push(syncManager);
+    return syncManager;
+  }
+
+  return {
+    SqliteStore: FakeSqliteStore,
+    Indexer: FakeIndexer,
+    createSyncStateManager,
+  };
+});
+
+vi.mock("../../fastflags/search.js", () => {
+  class FakeFastFlagSearch {
+    search = serverState.fastFlagSearch;
+  }
+
+  return { FastFlagSearch: FakeFastFlagSearch };
+});
+
+vi.mock("../../scheduler/seed-manager.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../scheduler/seed-manager.js")>();
+  class FakeSeedManager {
+    startBackground = vi.fn();
+    stop = vi.fn();
+    prioritize = vi.fn();
+    prepareStartup = vi.fn(async () => {});
+    getProgress = vi.fn((source: string) => ({
+      source,
+      status: "pending",
+      seededItems: 0,
+      estimatedTotal: 10,
+      percent: 0,
+    }));
+
+    constructor() {
+      serverState.seedManagers.push(this);
+    }
+  }
+
+  return { ...actual, SeedManager: FakeSeedManager };
+});
 
 async function loadServer() {
   return import("../index.js");
@@ -107,6 +232,10 @@ describe("server", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.resetModules();
+    serverState.seedManagers.length = 0;
+    serverState.stores.length = 0;
+    serverState.syncManagers.length = 0;
+    serverState.fastFlagSearch.mockResolvedValue([]);
     process.argv = [...originalArgv];
     if (originalGithubToken === undefined) {
       delete process.env.GITHUB_TOKEN;
@@ -127,38 +256,50 @@ describe("server", () => {
 
   it("registers the expected tools and prompt", async () => {
     const { createServer } = await loadServer();
-    const server = createServer() as unknown as {
-      options: { name: string; version: string };
-      tools: Map<
-        string,
-        {
-          schema: unknown;
-          handler: (args: Record<string, unknown>) => Promise<unknown>;
-        }
-      >;
-      prompts: Map<
-        string,
-        {
-          schema: unknown;
-          handler: (args: Record<string, unknown>) => Promise<unknown>;
-        }
-      >;
-    };
+    const result = createServer({ autoStartScheduler: false }) as unknown as ServerInstance;
+    const server = result.server as unknown as MockServer;
 
-    expect(server.options).toMatchObject({ name: "rodocsmcp", version: "1.0.0" });
+    expect(server.options).toMatchObject({
+      name: "rodocsmcp",
+      version: "2.0.0",
+    });
     expect([...server.tools.keys()]).toEqual([
       "get_api_reference",
       "get_many_api_references",
       "list_api_names",
       "find_api_name",
       "search_guides",
+      "roblox_search",
+      "rodocs_status",
+      "roblox_devforum",
       "get_guide",
       "list_guides",
       "get_code_samples",
       "compare_api_members",
       "get_api_changelog",
+      "roblox_fastflags",
     ]);
     expect(server.prompts.has("roblox-dev-assistant")).toBe(true);
+  }, 30000);
+
+  it("starts quickly and defers background seeding off the construction path", async () => {
+    const { createServer } = await loadServer();
+    const startedAt = performance.now();
+    const result = createServer() as unknown as ServerInstance;
+    const elapsedMs = performance.now() - startedAt;
+    const server = result.server as unknown as MockServer;
+
+    expect(elapsedMs).toBeLessThan(100);
+    expect(server.tools.size).toBeGreaterThan(0);
+    // Seed must NOT start synchronously during construction — the initialize
+    // handshake must never block on it.
+    expect(serverState.seedManagers[0]?.startBackground).not.toHaveBeenCalled();
+
+    // It starts on a later tick (after the caller has wired/awaited connect).
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(serverState.seedManagers[0]?.startBackground).toHaveBeenCalledOnce();
+
+    result.shutdown();
   });
 
   it("projects api references through the tool handler", async () => {
@@ -241,24 +382,16 @@ describe("server", () => {
     });
 
     const { createServer } = await loadServer();
-    const server = createServer() as unknown as {
-      tools: Map<
-        string,
-        {
-          handler: (args: Record<string, unknown>) => Promise<{
-            content: Array<{ type: string; text: string }>;
-          }>;
-        }
-      >;
-    };
+    const result = createServer({ autoStartScheduler: false }) as unknown as ServerInstance;
+    const server = result.server as unknown as MockServer;
 
     const handler = server.tools.get("get_api_reference")?.handler;
     expect(handler).toBeDefined();
 
-    const response = await handler?.({
+    const response = (await handler?.({
       topic: "DataStoreService",
       includeInherited: true,
-    });
+    })) as { content: Array<{ text: string }> } | undefined;
     const payload = JSON.parse(response?.content[0]?.text ?? "{}") as {
       name: string;
       kind: string;
@@ -277,7 +410,7 @@ describe("server", () => {
     expect(payload.codeSamples.length).toBeGreaterThan(0);
   });
 
-  it("uses --github-token for warm-up and tool handlers", async () => {
+  it("uses --github-token for tool handlers without eager warm-up", async () => {
     process.argv = ["node", "src/server/index.ts", "--github-token", "pat-123"];
 
     serverState.scrapeTopic.mockResolvedValue({
@@ -292,18 +425,10 @@ describe("server", () => {
     });
 
     const { createServer } = await loadServer();
-    const server = createServer() as unknown as {
-      tools: Map<
-        string,
-        {
-          handler: (args: Record<string, unknown>) => Promise<{
-            content: Array<{ type: string; text: string }>;
-          }>;
-        }
-      >;
-    };
+    const result = createServer({ autoStartScheduler: false }) as unknown as ServerInstance;
+    const server = result.server as unknown as MockServer;
 
-    expect(serverState.warmUp).toHaveBeenCalledWith("pat-123");
+    expect(serverState.warmUp).not.toHaveBeenCalled();
 
     await server.tools.get("get_api_reference")?.handler({
       topic: "Actor",
@@ -313,8 +438,121 @@ describe("server", () => {
     await server.tools.get("get_guide")?.handler({ path: "tutorials/save-player-data.md" });
 
     expect(serverState.scrapeTopic).toHaveBeenCalledWith("Actor", "pat-123");
-    expect(serverState.search).toHaveBeenCalledWith("Act", { types: ["api"], limit: 1 }, "pat-123");
+    expect(serverState.search).toHaveBeenCalledWith("Act", { types: ["api"], limit: 5 }, "pat-123");
     expect(serverState.fetchGuide).toHaveBeenCalledWith("tutorials/save-player-data.md", "pat-123");
+  });
+
+  it("routes roblox_search through the grouped search service", async () => {
+    serverState.robloxSearch.mockResolvedValue({
+      query: "data store",
+      source: "all",
+      limit: 3,
+      results: {
+        docs: [{ type: "api", name: "DataStoreService", score: 10 }],
+        guides: [],
+        fastflags: [],
+        devforum: [],
+      },
+    });
+
+    const { createServer } = await loadServer();
+    const result = createServer({
+      autoStartScheduler: false,
+      githubToken: "pat-123",
+    }) as unknown as ServerInstance;
+    const server = result.server as unknown as MockServer;
+
+    const response = (await server.tools.get("roblox_search")?.handler({
+      query: "data store",
+      source: "all",
+      limit: 3,
+    })) as { content: Array<{ text: string }> } | undefined;
+
+    expect(serverState.robloxSearch).toHaveBeenCalledWith(expect.anything(), {
+      query: "data store",
+      source: "all",
+      limit: 3,
+      githubToken: "pat-123",
+    });
+    expect(JSON.parse(response?.content[0]?.text ?? "{}")).toMatchObject({
+      query: "data store",
+      results: {
+        docs: [{ name: "DataStoreService" }],
+      },
+    });
+  });
+
+  it("routes roblox_devforum through the local DevForum search service", async () => {
+    serverState.searchDevForumStore.mockResolvedValue({
+      query: "datastore",
+      results: [
+        {
+          title: "DataStore issue",
+          url: "https://devforum.roblox.com/t/datastore/1",
+          tags: ["scripting"],
+          score: 90,
+          codeSnippets: [],
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          lastSeenAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+    });
+
+    const { createServer } = await loadServer();
+    const result = createServer({ autoStartScheduler: false }) as unknown as ServerInstance;
+    const server = result.server as unknown as MockServer;
+
+    const response = (await server.tools.get("roblox_devforum")?.handler({
+      query: "datastore",
+      tags: ["scripting"],
+      requireAcceptedAnswer: true,
+      requireStaffReply: false,
+      minScore: 70,
+      limit: 5,
+    })) as { content: Array<{ text: string }>; isError?: boolean } | undefined;
+
+    expect(serverState.searchDevForumStore).toHaveBeenCalledWith(expect.anything(), {
+      query: "datastore",
+      tags: ["scripting"],
+      requireAcceptedAnswer: true,
+      requireStaffReply: false,
+      minScore: 70,
+      limit: 5,
+    });
+    expect(response?.isError).toBeUndefined();
+    expect(serverState.seedManagers[0]?.prioritize).toHaveBeenCalledWith("devforum");
+    expect(JSON.parse(response?.content[0]?.text ?? "{}")).toMatchObject({
+      query: "datastore",
+      results: [{ title: "DataStore issue" }],
+    });
+  });
+
+  it("returns a warming hint for empty roblox_devforum local store responses", async () => {
+    serverState.searchDevForumStore.mockResolvedValue({
+      query: "datastore",
+      results: [],
+      message: "No local DevForum records found. Run `npx rodocsmcp --seed-devforum`.",
+    });
+
+    const { createServer } = await loadServer();
+    const result = createServer({ autoStartScheduler: false }) as unknown as ServerInstance;
+    const server = result.server as unknown as MockServer;
+
+    const response = (await server.tools.get("roblox_devforum")?.handler({
+      query: "datastore",
+    })) as { content: Array<{ text: string }>; isError?: boolean } | undefined;
+
+    const payload = JSON.parse(response?.content[0]?.text ?? "{}") as {
+      warming?: boolean;
+      hint?: string;
+      results?: unknown[];
+    };
+
+    expect(response?.isError).toBeUndefined();
+    expect(payload.results).toEqual([]);
+    expect(payload.warming).toBe(true);
+    expect(payload.hint).toContain("rodocs seed devforum");
+    expect(serverState.seedManagers[0]?.prioritize).toHaveBeenCalledWith("devforum");
   });
 
   it("falls back to GITHUB_TOKEN when no flag is present", async () => {
@@ -329,23 +567,211 @@ describe("server", () => {
     serverState.fetchGuideIndex.mockResolvedValue([]);
 
     const { createServer } = await loadServer();
-    const server = createServer() as unknown as {
-      tools: Map<
-        string,
-        {
-          handler: (args: Record<string, unknown>) => Promise<{
-            content: Array<{ type: string; text: string }>;
-          }>;
-        }
-      >;
-    };
+    const result = createServer({ autoStartScheduler: false }) as unknown as ServerInstance;
+    const server = result.server as unknown as MockServer;
 
-    expect(serverState.warmUp).toHaveBeenCalledWith("env-token");
+    expect(serverState.warmUp).not.toHaveBeenCalled();
 
     await server.tools.get("list_api_names")?.handler({});
     await server.tools.get("list_guides")?.handler({});
 
     expect(serverState.scrapeIndex).toHaveBeenCalledWith("env-token");
     expect(serverState.fetchGuideIndex).toHaveBeenCalledWith("env-token");
+  });
+
+  it("returns a warming hint and prioritizes fastflags when the local store is empty", async () => {
+    const { createServer } = await loadServer();
+    const result = createServer({ autoStartScheduler: false }) as unknown as ServerInstance;
+    const server = result.server as unknown as MockServer;
+
+    const response = (await server.tools.get("roblox_fastflags")?.handler({
+      query: "Debug",
+    })) as { content: Array<{ text: string }> } | undefined;
+    const payload = JSON.parse(response?.content[0]?.text ?? "{}") as {
+      results?: unknown[];
+      warming?: boolean;
+      hint?: string;
+    };
+
+    expect(payload.results).toEqual([]);
+    expect(payload.warming).toBe(true);
+    expect(payload.hint).toContain("rodocs seed fastflags");
+    expect(serverState.seedManagers[0]?.prioritize).toHaveBeenCalledWith("fastflags");
+  });
+
+  it("reports cache and seed state through rodocs_status", async () => {
+    const { createServer } = await loadServer();
+    const result = createServer({ autoStartScheduler: false }) as unknown as ServerInstance;
+    const server = result.server as unknown as MockServer;
+    const store = serverState.stores[0];
+    const syncManager = serverState.syncManagers[0];
+
+    store?.countByPrefix?.mockResolvedValueOnce(42).mockResolvedValueOnce(3);
+    syncManager?.getSourceState.mockImplementation(async (key: string) =>
+      key === "seed:fastflags"
+        ? {
+            lastSyncAt: 123,
+            metadata: {
+              seedProgress: { status: "complete" },
+              embeddingsComplete: true,
+              embeddingsCount: 42,
+            },
+          }
+        : null,
+    );
+
+    const response = (await server.tools.get("rodocs_status")?.handler({
+      source: "fastflags",
+    })) as { content: Array<{ text: string }> } | undefined;
+    const payload = JSON.parse(response?.content[0]?.text ?? "{}") as {
+      cachePath?: string;
+      sources?: Array<{
+        source: string;
+        records: number | null;
+        persistedStatus: string;
+        embeddingsComplete: boolean;
+      }>;
+    };
+
+    expect(payload.cachePath).toBe("/tmp/rodocsmcp/store.db");
+    expect(payload.sources?.[0]).toMatchObject({
+      source: "fastflags",
+      records: 42,
+      persistedStatus: "complete",
+      embeddingsComplete: true,
+    });
+  });
+
+  it("annotates all registered tools as read-only and idempotent", async () => {
+    const { createServer } = await loadServer();
+    const result = createServer({ autoStartScheduler: false }) as unknown as ServerInstance;
+    const server = result.server as unknown as MockServer;
+
+    for (const [name, entry] of server.tools) {
+      const schema = entry.schema as { annotations?: Record<string, unknown> };
+      expect(schema.annotations, `tool ${name} should declare annotations`).toMatchObject({
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+      });
+    }
+  });
+
+  it("supports memberFilter, memberKind, summaryOnly, and structured errors in get_api_reference", async () => {
+    const entry = createEntry("TweenService");
+    entry.class.ownMembers.methods.push(
+      {
+        name: "Create",
+        summary: "Creates a new Tween",
+        tags: [],
+        deprecationMessage: "",
+        isDeprecated: false,
+        inheritedFrom: "TweenService",
+        threadSafety: "Safe",
+        security: "None",
+      },
+      {
+        name: "GetValue",
+        summary: "Computes easing alpha",
+        tags: [],
+        deprecationMessage: "",
+        isDeprecated: false,
+        inheritedFrom: "TweenService",
+        threadSafety: "Safe",
+        security: "None",
+      },
+    );
+    entry.class.ownMembers.properties.push({
+      name: "ClassName",
+      summary: "Name of class",
+      tags: ["ReadOnly"],
+      deprecationMessage: "",
+      isDeprecated: false,
+      inheritedFrom: "TweenService",
+      threadSafety: "Safe",
+      security: "None",
+    });
+
+    serverState.scrapeTopic.mockResolvedValueOnce({ ok: true, topic: "TweenService", entry });
+    serverState.scrapeTopic.mockResolvedValueOnce({ ok: true, topic: "TweenService", entry });
+    serverState.scrapeTopic.mockRejectedValueOnce(new Error("Topic not found"));
+    serverState.search.mockResolvedValueOnce([{ type: "api", name: "TweenService", score: 90 }]);
+
+    const { createServer } = await loadServer();
+    const result = createServer({ autoStartScheduler: false }) as unknown as ServerInstance;
+    const server = result.server as unknown as MockServer;
+    const handler = server.tools.get("get_api_reference")?.handler;
+
+    const filtered = (await handler?.({
+      topic: "TweenService",
+      includeInherited: false,
+      memberFilter: "create",
+      memberKind: "method",
+    })) as { content: Array<{ text: string }> };
+    const filteredPayload = JSON.parse(filtered.content[0]?.text ?? "{}") as {
+      members: Array<{ name: string }>;
+    };
+    expect(filteredPayload.members.map((m) => m.name)).toEqual(["Create"]);
+
+    const summary = (await handler?.({
+      topic: "TweenService",
+      summaryOnly: true,
+    })) as { content: Array<{ text: string }> };
+    const summaryPayload = JSON.parse(summary.content[0]?.text ?? "{}") as {
+      members: unknown[];
+      codeSamples: unknown[];
+    };
+    expect(summaryPayload.members).toEqual([]);
+    expect(summaryPayload.codeSamples).toEqual([]);
+
+    const errored = (await handler?.({ topic: "TweenServic" })) as {
+      isError?: boolean;
+      content: Array<{ text: string }>;
+    };
+    expect(errored.isError).toBe(true);
+    expect(JSON.parse(errored.content[0]?.text ?? "{}")).toMatchObject({
+      error: "Topic not found",
+      suggestions: ["TweenService"],
+    });
+  });
+
+  it("filters list_api_names and list_guides by kind/category, prefix, and limit", async () => {
+    serverState.scrapeIndex.mockResolvedValue({
+      ok: true,
+      classes: ["TweenService", "TextLabel", "Part"],
+      datatypes: ["TweenInfo", "Vector3"],
+      enums: ["TweenStatus"],
+      globals: [],
+      libraries: [],
+    });
+    serverState.fetchGuideIndex.mockResolvedValue([
+      { path: "scripting/events.md", title: "Events", description: "", category: "scripting" },
+      { path: "scripting/data.md", title: "Data", description: "", category: "scripting" },
+      { path: "physics/joints.md", title: "Joints", description: "", category: "physics" },
+    ]);
+
+    const { createServer } = await loadServer();
+    const result = createServer({ autoStartScheduler: false }) as unknown as ServerInstance;
+    const server = result.server as unknown as MockServer;
+
+    const apiRes = (await server.tools.get("list_api_names")?.handler({
+      kind: "class",
+      prefix: "t",
+      limit: 1,
+    })) as { content: Array<{ text: string }> };
+    expect(JSON.parse(apiRes.content[0]?.text ?? "{}")).toEqual({
+      classes: ["TweenService"],
+      datatypes: [],
+      enums: [],
+      globals: [],
+      libraries: [],
+    });
+
+    const guideRes = (await server.tools.get("list_guides")?.handler({
+      category: "scripting",
+      prefix: "scripting/d",
+      limit: 5,
+    })) as { content: Array<{ text: string }> };
+    expect(JSON.parse(guideRes.content[0]?.text ?? "[]")).toHaveLength(1);
   });
 });

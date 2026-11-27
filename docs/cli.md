@@ -33,7 +33,7 @@ Members: 12 own  45 inherited
 ```
 
 ### Index List
-Lists all available classes and enums in the Roblox API.
+Lists all available classes, datatypes, enums, globals, and libraries in the Roblox API.
 ```bash
 rodocsmcp --list
 ```
@@ -45,9 +45,25 @@ CLASSES (1200)
   BasePart
   ...
 
+DATATYPES (80)
+
+  Vector3
+  CFrame
+  ...
+
 ENUMS (400)
 
-  Enum.Material
+  Material
+  ...
+
+GLOBALS (10)
+
+  task
+  ...
+
+LIBRARIES (5)
+
+  buffer
   ...
 ```
 
@@ -125,7 +141,7 @@ USAGE
 | Flag | Description |
 | :--- | :--- |
 | `--stdio` | Starts the MCP server over stdio. |
-| `--list` | Lists all known class and enum names. |
+| `--list` | Lists known API names grouped by category. |
 | `--find <query>` | Resolves the closest API name. |
 | `--search-guide <query>` | Searches creator guides by keyword. |
 | `--guide <path>` | Fetches a guide by relative path. |

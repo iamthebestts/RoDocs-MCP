@@ -11,12 +11,17 @@ const mockState = vi.hoisted(() => {
     set = disk.set;
   }
 
+  const logEvents: Array<{ event: string; strategy?: string; key?: string }> = [];
+
   const state = {
     disk,
     diskCtor: DiskCacheMock,
     fetchIndex: vi.fn(),
     fetchTopic: vi.fn(),
     findClosestMatch: vi.fn(),
+    logEvents,
+    observe: vi.fn((e: { event: string; strategy?: string; key?: string }) => logEvents.push(e)),
+    startTimer: vi.fn(() => () => 0),
   };
 
   return state;
@@ -30,6 +35,13 @@ vi.mock("../fetch.js", () => ({
 
 vi.mock("../disk-cache.js", () => ({
   DiskCache: mockState.diskCtor,
+}));
+
+vi.mock("../../utils/logger.js", () => ({
+  observe: mockState.observe,
+  startTimer: mockState.startTimer,
+  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  _setLogEventSinkForTesting: vi.fn(),
 }));
 
 async function loadScraper() {
@@ -47,6 +59,9 @@ describe("scraper index", () => {
     mockState.fetchIndex.mockReset();
     mockState.fetchTopic.mockReset();
     mockState.findClosestMatch.mockReset();
+    mockState.logEvents.length = 0;
+    mockState.observe.mockClear();
+    mockState.startTimer.mockReturnValue(() => 0);
     mockState.findClosestMatch.mockImplementation((query: string, names: string[]) => {
       const lower = query.toLowerCase();
       const exact = names.find((name) => name.toLowerCase() === lower);
@@ -95,7 +110,10 @@ describe("scraper index", () => {
 
     mockState.fetchIndex.mockResolvedValue({
       classes: ["DataStoreService"],
+      datatypes: [],
       enums: [],
+      globals: [],
+      libraries: [],
     });
     mockState.disk.get.mockResolvedValue(entry);
 
@@ -136,7 +154,10 @@ describe("scraper index", () => {
 
     mockState.fetchIndex.mockResolvedValue({
       classes: ["DataStoreService"],
+      datatypes: [],
       enums: [],
+      globals: [],
+      libraries: [],
     });
     mockState.fetchTopic.mockResolvedValue(entry);
     mockState.disk.get.mockResolvedValue(undefined);
@@ -151,7 +172,7 @@ describe("scraper index", () => {
     expect(cached.entry).toBe(entry);
     expect(mockState.fetchIndex).toHaveBeenCalledTimes(1);
     expect(mockState.fetchTopic).toHaveBeenCalledTimes(1);
-    expect(mockState.fetchTopic).toHaveBeenCalledWith("datastore");
+    expect(mockState.fetchTopic).toHaveBeenCalledWith("datastore", undefined);
     expect(mockState.disk.get).toHaveBeenCalledTimes(1);
     expect(mockState.disk.set).toHaveBeenCalledWith("datastore", entry);
     expect(mockState.disk.set).toHaveBeenCalledWith("DataStoreService", entry);
@@ -203,20 +224,27 @@ describe("scraper index", () => {
   it("finds the closest api name from a cached index", async () => {
     mockState.fetchIndex.mockResolvedValue({
       classes: ["DataStoreService", "RunService"],
+      datatypes: ["Vector3"],
       enums: ["KeyCode"],
+      globals: [],
+      libraries: [],
     });
 
     const { findClosestApiName } = await loadScraper();
 
     await expect(findClosestApiName("datastore")).resolves.toBe("DataStoreService");
     await expect(findClosestApiName("run")).resolves.toBe("RunService");
+    await expect(findClosestApiName("vector")).resolves.toBe("Vector3");
     expect(mockState.fetchIndex).toHaveBeenCalledTimes(1);
   });
 
   it("passes an explicit github token to scrapeIndex", async () => {
     mockState.fetchIndex.mockResolvedValue({
       classes: ["Actor"],
+      datatypes: [],
       enums: ["KeyCode"],
+      globals: [],
+      libraries: [],
     });
 
     const { scrapeIndex } = await loadScraper();
@@ -224,7 +252,10 @@ describe("scraper index", () => {
     await expect(scrapeIndex("pat-123")).resolves.toEqual({
       ok: true,
       classes: ["Actor"],
+      datatypes: [],
       enums: ["KeyCode"],
+      globals: [],
+      libraries: [],
     });
     expect(mockState.fetchIndex).toHaveBeenCalledWith("pat-123");
   });
@@ -254,7 +285,10 @@ describe("scraper index", () => {
 
     mockState.fetchIndex.mockResolvedValue({
       classes: ["Actor"],
+      datatypes: [],
       enums: [],
+      globals: [],
+      libraries: [],
     });
     mockState.fetchTopic.mockResolvedValue(entry);
     mockState.disk.get.mockResolvedValue(undefined);
@@ -268,5 +302,93 @@ describe("scraper index", () => {
       entry,
     });
     expect(mockState.fetchIndex).toHaveBeenCalledWith("env-token");
+  });
+
+  describe("fallback chain observability", () => {
+    const entry = {
+      class: {
+        name: "DataStoreService",
+        summary: "",
+        description: "",
+        inherits: [],
+        descendants: [],
+        tags: [],
+        deprecationMessage: "",
+        codeSamples: [],
+        ownMembers: { properties: [], methods: [], events: [], callbacks: [] },
+      },
+      inheritedMembers: [],
+    };
+
+    beforeEach(() => {
+      mockState.fetchIndex.mockResolvedValue({
+        classes: ["DataStoreService"],
+        datatypes: [],
+        enums: [],
+        globals: [],
+        libraries: [],
+      });
+    });
+
+    it("does not emit scraper.fallback on L1 memory hit", async () => {
+      mockState.disk.get.mockResolvedValue(undefined);
+      mockState.disk.set.mockResolvedValue(undefined);
+      mockState.fetchTopic.mockResolvedValue(entry);
+
+      const { scrapeTopic } = await loadScraper();
+      // first call: network fetch (warms L1)
+      await scrapeTopic("DataStoreService");
+      mockState.logEvents.length = 0;
+      mockState.observe.mockClear();
+
+      // second call: L1 hit — no fallback event
+      await scrapeTopic("DataStoreService");
+
+      const fallbacks = mockState.logEvents.filter((e) => e.event === "scraper.fallback");
+      expect(fallbacks).toHaveLength(0);
+    });
+
+    it("emits scraper.fallback with strategy=disk on L2 hit", async () => {
+      mockState.disk.get.mockResolvedValue(entry);
+
+      const { scrapeTopic } = await loadScraper();
+      await scrapeTopic("DataStoreService");
+
+      const fallback = mockState.logEvents.find((e) => e.event === "scraper.fallback");
+      expect(fallback).toMatchObject({
+        event: "scraper.fallback",
+        source: "scraper",
+        key: "DataStoreService",
+        strategy: "disk",
+      });
+    });
+
+    it("emits scraper.fallback with strategy=network on full cache miss", async () => {
+      mockState.disk.get.mockResolvedValue(undefined);
+      mockState.disk.set.mockResolvedValue(undefined);
+      mockState.fetchTopic.mockResolvedValue(entry);
+
+      const { scrapeTopic } = await loadScraper();
+      await scrapeTopic("DataStoreService");
+
+      const fallback = mockState.logEvents.find((e) => e.event === "scraper.fallback");
+      expect(fallback).toMatchObject({
+        event: "scraper.fallback",
+        source: "scraper",
+        strategy: "network",
+      });
+    });
+
+    it("emits exactly one scraper.fallback per call", async () => {
+      mockState.disk.get.mockResolvedValue(undefined);
+      mockState.disk.set.mockResolvedValue(undefined);
+      mockState.fetchTopic.mockResolvedValue(entry);
+
+      const { scrapeTopic } = await loadScraper();
+      await scrapeTopic("DataStoreService");
+
+      const fallbacks = mockState.logEvents.filter((e) => e.event === "scraper.fallback");
+      expect(fallbacks).toHaveLength(1);
+    });
   });
 });
