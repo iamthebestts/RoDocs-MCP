@@ -113,4 +113,57 @@ describe("SqliteStore", () => {
       .get();
     expect(row?.name).toBe("vec_items");
   });
+
+  it("enables WAL journal mode and busy_timeout on open()", () => {
+    const db = store.getDb();
+    expect(String(db.pragma("journal_mode", { simple: true })).toLowerCase()).toBe("wal");
+    expect(db.pragma("busy_timeout", { simple: true })).toBe(5000);
+  });
+
+  it("countByPrefix() is case-sensitive and treats SQL LIKE wildcards literally", async () => {
+    await store.put("a_b:1", 1);
+    await store.put("axb:2", 2);
+    await store.put("A_B:3", 3);
+    await store.put("p%:4", 4);
+    await store.put("px:5", 5);
+
+    expect(await store.countByPrefix("a_b:")).toBe(1);
+    expect(await store.countByPrefix("p%:")).toBe(1);
+    expect(await store.countByPrefix("")).toBe(5);
+  });
+
+  it("putMany(), getByPrefix(), and delByPrefix() work atomically", async () => {
+    await store.putMany([
+      { key: "fastflags:A", value: { name: "A" } },
+      { key: "fastflags:B", value: { name: "B" } },
+      { key: "devforum:1", value: { title: "One" } },
+    ]);
+
+    const flags = await store.getByPrefix<{ name: string }>("fastflags:");
+    expect(flags).toHaveLength(2);
+    expect(flags.map((e) => e.key).sort()).toEqual(["fastflags:A", "fastflags:B"]);
+    expect(flags.find((e) => e.key === "fastflags:A")?.value).toEqual({ name: "A" });
+
+    const deleted = await store.delByPrefix("fastflags:");
+    expect(deleted).toBe(2);
+    expect(await store.countByPrefix("fastflags:")).toBe(0);
+    expect(await store.countByPrefix("devforum:")).toBe(1);
+  });
+
+  it("clear() also removes rows from vec_items", async () => {
+    const db = store.getDb();
+    const vec = new Float32Array(384).fill(0.1);
+    db.prepare("INSERT INTO vec_items (id, source, embedding) VALUES (?, ?, ?)").run(
+      "doc-1",
+      "docs",
+      vec,
+    );
+    await store.put("k1", "v1");
+
+    await store.clear();
+
+    const row = db.prepare<[], { count: number }>("SELECT COUNT(*) AS count FROM vec_items").get();
+    expect(row?.count).toBe(0);
+    expect(await store.get("k1")).toBe(null);
+  });
 });
