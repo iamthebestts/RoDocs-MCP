@@ -23,12 +23,17 @@ function makeInMemoryStore() {
       embedding FLOAT[384]
     )
   `);
+  const values = new Map<string, unknown>();
   const storeMock = {
     getPath: () => ":memory:",
-    get: vi.fn(),
-    put: vi.fn(),
-    del: vi.fn(),
-    keys: vi.fn().mockResolvedValue([]),
+    get: vi.fn(async (key: string) => values.get(key) ?? null),
+    put: vi.fn(async (key: string, value: unknown) => {
+      values.set(key, value);
+    }),
+    del: vi.fn(async (key: string) => {
+      values.delete(key);
+    }),
+    keys: vi.fn(async () => Array.from(values.keys())),
     countByPrefix: vi.fn().mockResolvedValue(0),
     clear: vi.fn(),
     open: vi.fn(),
@@ -105,7 +110,7 @@ describe("EmbeddingIndexer", () => {
     const rows = db.prepare("SELECT id FROM vec_items").all() as { id: string }[];
     expect(rows).toHaveLength(1);
     expect(rows[0]?.id).toBe("Color3");
-    expect(mockEmbed).toHaveBeenCalledWith(["Color3 datatype"]);
+    expect(mockEmbed).toHaveBeenCalledWith(["Color3 datatype"], { mode: "passage" });
   });
 
   it("indexSource() throws when vector count mismatches doc count", async () => {
@@ -127,5 +132,77 @@ describe("EmbeddingIndexer", () => {
 
     const rows = db.prepare("SELECT id FROM vec_items WHERE source = 'docs'").all();
     expect(rows).toHaveLength(1);
+  });
+
+  it("indexSource() skips unchanged docs with matching metadata", async () => {
+    const docs: EmbedDoc[] = [{ id: "Actor", source: "docs", text: "Actor v1" }];
+    mockEmbed.mockResolvedValueOnce([new Float32Array(384).fill(0.1)]);
+
+    await indexer.indexSource("docs", docs);
+    mockEmbed.mockClear();
+
+    await indexer.indexSource("docs", docs);
+
+    expect(mockEmbed).not.toHaveBeenCalled();
+    const rows = db.prepare("SELECT id FROM vec_items WHERE source = 'docs'").all();
+    expect(rows).toHaveLength(1);
+  });
+
+  it("indexSource() removes stale rows for docs no longer present", async () => {
+    const first: EmbedDoc[] = [
+      { id: "Actor", source: "docs", text: "Actor" },
+      { id: "Part", source: "docs", text: "Part" },
+    ];
+    const second: EmbedDoc[] = [{ id: "Actor", source: "docs", text: "Actor" }];
+    mockEmbed.mockResolvedValueOnce([
+      new Float32Array(384).fill(0.1),
+      new Float32Array(384).fill(0.2),
+    ]);
+
+    await indexer.indexSource("docs", first);
+    mockEmbed.mockClear();
+    await indexer.indexSource("docs", second);
+
+    const rows = db.prepare("SELECT id FROM vec_items WHERE source = 'docs'").all() as {
+      id: string;
+    }[];
+    expect(rows.map((row) => row.id)).toEqual(["Actor"]);
+    expect(mockEmbed).not.toHaveBeenCalled();
+  });
+
+  it("checkpoints each chunk so partial progress is preserved and resumed on retry", async () => {
+    const { db: chunkDb, storeMock } = makeInMemoryStore();
+    try {
+      const chunkIndexer = new EmbeddingIndexer(
+        storeMock as unknown as import("../../store/store-interface.js").IKeyValueStore,
+        chunkDb,
+        2,
+      );
+      const docs: EmbedDoc[] = [
+        { id: "d1", source: "docs", text: "one" },
+        { id: "d2", source: "docs", text: "two" },
+        { id: "d3", source: "docs", text: "three" },
+      ];
+
+      mockEmbed
+        .mockResolvedValueOnce([new Float32Array(384).fill(0.1), new Float32Array(384).fill(0.2)])
+        .mockRejectedValueOnce(new Error("interrupted on chunk 2"));
+
+      await expect(chunkIndexer.indexSource("docs", docs)).rejects.toThrow(/interrupted/);
+
+      const afterFail = chunkDb.prepare("SELECT id FROM vec_items ORDER BY id").all() as {
+        id: string;
+      }[];
+      expect(afterFail.map((r) => r.id)).toEqual(["d1", "d2"]);
+
+      mockEmbed.mockClear();
+      mockEmbed.mockResolvedValueOnce([new Float32Array(384).fill(0.3)]);
+      await chunkIndexer.indexSource("docs", docs);
+
+      expect(mockEmbed).toHaveBeenCalledTimes(1);
+      expect(mockEmbed).toHaveBeenCalledWith(["three"], { mode: "passage" });
+    } finally {
+      chunkDb.close();
+    }
   });
 });

@@ -1,7 +1,7 @@
 import type { DevForumRecord } from "../devforum/types.js";
 import { fetchIndex } from "../scraper/fetch.js";
 import { fetchGuideIndex } from "../scraper/guides.js";
-import type { IKeyValueStore } from "../store/store-interface.js";
+import { type IKeyValueStore, storeGetByPrefix } from "../store/index.js";
 import type { EmbedDoc } from "../types/index.js";
 
 export function dedupeEmbedDocs(docs: EmbedDoc[]): EmbedDoc[] {
@@ -43,30 +43,24 @@ export async function buildGuidesEmbedDocs(githubToken?: string): Promise<EmbedD
 }
 
 export async function buildFastflagsEmbedDocs(store: IKeyValueStore): Promise<EmbedDoc[]> {
-  const keys = (await store.keys()).filter((key) => key.startsWith("fastflags:"));
-  const docs: EmbedDoc[] = [];
-  for (const key of keys) {
-    const record = await store.get<{ name: string; description?: string }>(key);
-    docs.push({
-      id: key,
-      source: "fastflags",
-      text: record ? `${record.name} ${record.description ?? ""}`.trim() : key,
-    });
-  }
-  return docs;
+  const entries = await storeGetByPrefix<{ name: string; description?: string }>(
+    store,
+    "fastflags:",
+  );
+  return entries.map(({ key, value: record }) => ({
+    id: key,
+    source: "fastflags",
+    text: record ? `${record.name} ${record.description ?? ""}`.trim() : key,
+  }));
 }
 
 export async function buildDevforumEmbedDocs(store: IKeyValueStore): Promise<EmbedDoc[]> {
-  const keys = (await store.keys()).filter((key) => key.startsWith("devforum:"));
-  const docs: EmbedDoc[] = [];
-  for (const key of keys) {
-    const record = await store.get<DevForumRecord>(key);
-    if (!record) continue;
-    docs.push({
+  const entries = await storeGetByPrefix<DevForumRecord>(store, "devforum:");
+  return entries
+    .filter(({ value: record }) => Boolean(record))
+    .map(({ key, value: record }) => ({
       id: key,
       source: "devforum",
       text: `${record.title} ${record.content}`.trim(),
-    });
-  }
-  return docs;
+    }));
 }
