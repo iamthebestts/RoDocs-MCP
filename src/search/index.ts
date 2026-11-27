@@ -42,6 +42,47 @@ function apiPathPrefix(category: ApiSearchKind): string {
   }
 }
 
+function apiKindFromPath(path: string | undefined): ApiSearchKind | undefined {
+  if (!path) return undefined;
+  if (path.startsWith("classes/")) return "class";
+  if (path.startsWith("datatypes/")) return "datatype";
+  if (path.startsWith("enums/")) return "enum";
+  if (path.startsWith("globals/")) return "global";
+  if (path.startsWith("libraries/")) return "library";
+  return undefined;
+}
+
+function hydrateApiCategoriesFromBM25(): void {
+  if (apiCategories.size > 0 || apiBM25.indexedCount === 0) return;
+  for (const doc of apiBM25.indexedDocs) {
+    const kind = apiKindFromPath(doc.fields.path) ?? "class";
+    apiCategories.set(doc.id, kind);
+  }
+}
+
+function hydrateGuideMetaFromBM25(): void {
+  if (guideMetaById.size > 0 || guideBM25.indexedCount === 0) return;
+  for (const doc of guideBM25.indexedDocs) {
+    const path = doc.fields.path ?? doc.id;
+    guideMetaById.set(doc.id, {
+      path,
+      title: doc.fields.title ?? "",
+      description: doc.fields.description ?? "",
+      category: path.split("/")[0] ?? "unknown",
+    });
+  }
+}
+
+export function lookupApiCategory(name: string): ApiSearchKind | undefined {
+  hydrateApiCategoriesFromBM25();
+  return apiCategories.get(name);
+}
+
+export function lookupGuideMeta(path: string): GuideMetadata | undefined {
+  hydrateGuideMetaFromBM25();
+  return guideMetaById.get(path);
+}
+
 /**
  * Initialize the indexer with the provided store and sync manager.
  * Accepts an existing Indexer instance so the server can share one across all components.
@@ -157,6 +198,7 @@ function buildApiIndex(githubToken?: string): Promise<void> {
 
     if (indexer) {
       await indexer.loadOrBuildIndex("api", apiBM25, build);
+      hydrateApiCategoriesFromBM25();
     } else {
       await build();
     }
@@ -195,6 +237,7 @@ function buildGuideIndex(githubToken?: string): Promise<void> {
 
     if (indexer) {
       await indexer.loadOrBuildIndex("guides", guideBM25, build);
+      hydrateGuideMetaFromBM25();
     } else {
       await build();
     }
@@ -237,6 +280,7 @@ export async function searchApisLocal(query: string, limit = 10): Promise<readon
     await indexer.load(apiBM25, "api");
   }
   if (apiBM25.indexedCount === 0) return [];
+  hydrateApiCategoriesFromBM25();
 
   const exact = findExactApiName(query);
   return uniqueByName([
@@ -311,6 +355,7 @@ export async function searchGuidesLocal(
     await indexer.load(guideBM25, "guides");
   }
   if (guideBM25.indexedCount === 0) return [];
+  hydrateGuideMetaFromBM25();
 
   const resolvedQuery = resolveLuauSynonyms(query);
 

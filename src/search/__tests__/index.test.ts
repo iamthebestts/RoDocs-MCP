@@ -79,6 +79,7 @@ vi.mock("../../scraper/guides.js", () => ({
 }));
 
 import type { Indexer } from "../../store/indexer.js";
+import { BM25 } from "../bm25.js";
 import {
   _resetIndexesForTesting,
   ensureApiIndex,
@@ -538,6 +539,69 @@ describe("searchGuides (direct)", () => {
       await searchGuides("remote events", 5);
 
       expect(events.some((e) => e.event === "search.rebuild" && e.source === "guides")).toBe(false);
+    });
+  });
+
+  describe("warm-cache BM25 metadata hydration", () => {
+    it("hydrates API categories and guide metadata when loaded from persisted BM25 index", async () => {
+      _resetIndexesForTesting({ guideScoreThreshold: 0 });
+
+      const persistedApi = new BM25();
+      persistedApi.index([
+        { id: "Vector3", fields: { title: "Vector3", path: "datatypes/Vector3" } },
+        { id: "KeyCode", fields: { title: "KeyCode", path: "enums/KeyCode" } },
+        { id: "task", fields: { title: "task", path: "libraries/task" } },
+      ]);
+      const serializedApi = persistedApi.serialize();
+
+      const persistedGuides = new BM25();
+      persistedGuides.index([
+        {
+          id: "scripting/data/data-stores.md",
+          fields: {
+            title: "Data Stores",
+            path: "scripting/data/data-stores.md",
+            description: "Persist player data across sessions",
+          },
+        },
+      ]);
+      const serializedGuides = persistedGuides.serialize();
+
+      const fakeIndexer = {
+        onClear: vi.fn(),
+        load: vi.fn(async (target: BM25, source: string) => {
+          if (source === "api") {
+            target.restore(serializedApi);
+            return true;
+          }
+          if (source === "guides") {
+            target.restore(serializedGuides);
+            return true;
+          }
+          return false;
+        }),
+      } as unknown as Indexer;
+
+      initIndexer({} as never, {} as never, fakeIndexer);
+
+      const apiHits = await searchApisLocal("Vector3", 5);
+      expect(apiHits[0]).toMatchObject({
+        name: "Vector3",
+        category: "datatype",
+        path: "datatypes/Vector3",
+        score: 100,
+      });
+
+      const guideHits = await searchGuidesLocal("data stores", 5);
+      expect(guideHits[0]).toMatchObject({
+        name: "scripting/data/data-stores.md",
+        title: "Data Stores",
+        description: "Persist player data across sessions",
+        category: "scripting",
+      });
+
+      expect(mockFetchIndex).not.toHaveBeenCalled();
+      expect(mockFetchGuideIndex).not.toHaveBeenCalled();
     });
   });
 });

@@ -120,6 +120,10 @@ export class BM25 {
     return this.docs.length;
   }
 
+  get indexedDocs(): readonly BM25Doc[] {
+    return this.docs;
+  }
+
   /**
    * Serializes the current index state into a plain object for persistence.
    */
