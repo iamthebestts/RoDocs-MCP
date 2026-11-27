@@ -38,12 +38,15 @@ Use this decision tree to pick the right tool:
 ---
 
 ## `get_api_reference`
-Returns full API documentation for a single Roblox class, enum, datatype, library or global.
+Returns API documentation for a single Roblox class, enum, datatype, library or global. Returns `isError: true` with closest `suggestions` when a topic is not found.
 
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
 | `topic` | `string` | Yes | Exact topic name, case-sensitive. E.g.: Actor, TweenService. |
 | `includeInherited` | `boolean` | No | Includes members inherited from parent classes. Default: `false`. |
+| `memberFilter` | `string` | No | Case-insensitive substring filter on member name or summary. |
+| `memberKind` | `string` | No | Filter members by kind: `"property"`, `"method"`, `"event"`, or `"callback"`. |
+| `summaryOnly` | `boolean` | No | Omits `members` and `codeSamples` for a compact overview. Default: `false`. |
 
 **Example Response**
 ```json
@@ -97,7 +100,9 @@ Returns Roblox API names grouped by class, datatype, enum, global, and library.
 
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
-| N/A | N/A | No | No input required. |
+| `kind` | `string` | No | Filter to one kind: `"class"`, `"datatype"`, `"enum"`, `"global"`, or `"library"`. |
+| `prefix` | `string` | No | Case-insensitive name prefix filter. |
+| `limit` | `number` | No | Maximum names per group (1–5000). |
 
 **Example Response**
 ```json
@@ -165,11 +170,13 @@ TweenService is used to interpolate...
 ```
 
 ## `list_guides`
-Returns the full index of all Roblox creator guide paths and their categories.
+Returns the index of Roblox creator guide paths and their categories.
 
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
-| N/A | N/A | No | No input required. |
+| `category` | `string` | No | Case-insensitive category filter (e.g. `"scripting"`, `"physics"`). |
+| `prefix` | `string` | No | Case-insensitive path prefix filter. |
+| `limit` | `number` | No | Maximum guide entries to return (1–5000). |
 
 **Example Response**
 ```json
