@@ -130,5 +130,40 @@ describe("FastFlags Module", () => {
       const state = await syncManager.getSourceState("fastflags:PCClient.json");
       expect(state?.etag).toBe("sha1");
     });
+
+    it("deduplicates sources by target when a file SHA changes on re-seed", async () => {
+      vi.mocked(axios.get)
+        .mockResolvedValueOnce({
+          data: [
+            {
+              name: "PCClient.json",
+              type: "file",
+              download_url: "http://example.com/PCClient.json",
+              sha: "sha1",
+            },
+          ],
+        })
+        .mockResolvedValueOnce({ data: [{ name: "FFlagDupTest", value: true }] })
+        .mockResolvedValueOnce({
+          data: [
+            {
+              name: "PCClient.json",
+              type: "file",
+              download_url: "http://example.com/PCClient.json",
+              sha: "sha2",
+            },
+          ],
+        })
+        .mockResolvedValueOnce({ data: [{ name: "FFlagDupTest", value: true }] });
+
+      await scraper.seed();
+      await scraper.seed();
+
+      const saved = await store.get<{ sources: Array<{ target: string; sha?: string }> }>(
+        "fastflags:FFlagDupTest",
+      );
+      expect(saved?.sources).toHaveLength(1);
+      expect(saved?.sources[0]).toMatchObject({ target: "PCClient", sha: "sha2" });
+    });
   });
 });

@@ -1,5 +1,11 @@
 import axios from "axios";
-import type { IKeyValueStore, SyncStateManager } from "../store/index.js";
+import {
+  type IKeyValueStore,
+  type KeyValueEntry,
+  type SyncStateManager,
+  storeGetByPrefix,
+  storePutMany,
+} from "../store/index.js";
 import type { Indexer } from "../store/indexer.js";
 import { createKeepAliveAgents } from "../utils/axios-agents.js";
 import { buildGithubHeaders } from "../utils/github-token.js";
@@ -51,6 +57,9 @@ export class FastFlagScraper {
     let updated = 0;
     let modified = false;
 
+    const existingEntries = await storeGetByPrefix<FastFlag>(this.store, "fastflags:");
+    const flagMap = new Map<string, FastFlag>(existingEntries.map((e) => [e.key, e.value]));
+
     for (const item of items) {
       if (item.type !== "file" || !item.name.endsWith(".json") || !item.download_url) {
         continue;
@@ -67,34 +76,43 @@ export class FastFlagScraper {
       const rawFlags = this.ensureArray(fileResponse.data);
 
       const platforms = this.inferPlatforms(item.name);
+      const targetName = item.name.replace(".json", "");
+      const dirtyEntries = new Map<string, FastFlag>();
 
       for (const raw of rawFlags) {
         const normalized = normalizeFastFlag(raw);
         const enriched = enrichFastFlag({
           ...normalized,
           platforms,
-          targets: [item.name.replace(".json", "")],
-          sources: [
-            { target: item.name.replace(".json", ""), url: item.download_url, sha: item.sha ?? "" },
-          ],
+          targets: [targetName],
+          sources: [{ target: targetName, url: item.download_url, sha: item.sha ?? "" }],
         });
 
         const key = `fastflags:${enriched.name}`;
-        const existing = await this.store.get<FastFlag>(key);
+        const existing = flagMap.get(key);
 
         if (!existing) {
           added++;
-          await this.store.put(key, enriched);
+          flagMap.set(key, enriched);
+          dirtyEntries.set(key, enriched);
           modified = true;
         } else {
-          // Merge
           const merged = this.mergeFlags(existing, enriched);
           if (JSON.stringify(merged) !== JSON.stringify(existing)) {
-            await this.store.put(key, merged);
+            flagMap.set(key, merged);
+            dirtyEntries.set(key, merged);
             updated++;
             modified = true;
           }
         }
+      }
+
+      if (dirtyEntries.size > 0) {
+        const batch: KeyValueEntry<FastFlag>[] = [];
+        for (const [key, value] of dirtyEntries) {
+          batch.push({ key, value });
+        }
+        await storePutMany(this.store, batch);
       }
 
       await this.syncManager.updateSourceState(`fastflags:${item.name}`, {
@@ -114,7 +132,14 @@ export class FastFlagScraper {
   private mergeFlags(existing: FastFlag, incoming: FastFlag): FastFlag {
     const platforms = [...new Set([...existing.platforms, ...incoming.platforms])];
     const targets = [...new Set([...existing.targets, ...incoming.targets])];
-    const sources = [...existing.sources, ...incoming.sources];
+
+    // Deduplicate sources by target so repeated syncs update the entry in place
+    // instead of growing the sources array unboundedly.
+    const sourcesByTarget = new Map(existing.sources.map((s) => [s.target, s]));
+    for (const src of incoming.sources) {
+      sourcesByTarget.set(src.target, src);
+    }
+    const sources = Array.from(sourcesByTarget.values());
 
     let value = existing.value;
     let valuesByTarget = existing.valuesByTarget;
