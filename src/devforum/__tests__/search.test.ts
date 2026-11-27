@@ -333,6 +333,32 @@ describe("searchDevForumStore (cached path — with Indexer)", () => {
     expect(result.results).toHaveLength(1);
     expect(result.results[0]?.tags).toContain("data-store");
   });
+
+  it("indexes record.content body in cached BM25 search when no acceptedAnswer exists", async () => {
+    const store = asStore(
+      new MemoryStore(
+        new Map<string, unknown>([
+          [
+            "devforum:99",
+            record({
+              id: 99,
+              title: "General scripting question",
+              content: "How to optimize ParallelLuau Actor messaging",
+              acceptedAnswer: undefined,
+              staffReplies: [],
+              codeSnippets: [],
+              tags: ["scripting"],
+              score: 90,
+            }),
+          ],
+        ]),
+      ),
+    );
+
+    const result = await searchDevForumStore(store, { query: "ParallelLuau", minScore: 60 });
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0]?.id).toBe(99);
+  });
 });
 
 describe("searchDevForumStore observability", () => {

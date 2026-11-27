@@ -1,6 +1,6 @@
 import type { BM25Doc } from "../search/bm25.js";
 import { BM25 } from "../search/bm25.js";
-import type { IKeyValueStore } from "../store/index.js";
+import { type IKeyValueStore, storeGetByPrefix } from "../store/index.js";
 import type { Indexer } from "../store/indexer.js";
 import { observe, startTimer } from "../utils/logger.js";
 import type { DevForumRecord } from "./types.js";
@@ -156,18 +156,19 @@ function project(record: DevForumRecord): DevForumSearchResult {
 
 async function buildDevForumIndex(store: IKeyValueStore): Promise<void> {
   const elapsed = startTimer();
-  const keys = (await store.keys()).filter((key) => key.startsWith("devforum:"));
-  const records = (await Promise.all(keys.map((key) => store.get<DevForumRecord>(key)))).filter(
-    (record): record is DevForumRecord => record !== null,
-  );
+  const entries = await storeGetByPrefix<DevForumRecord>(store, "devforum:");
+  const records = entries.map((entry) => entry.value);
 
   const docs: BM25Doc[] = records.map((record) => ({
     id: String(record.id),
     fields: {
       title: record.title,
-      content: [record.acceptedAnswer ?? "", ...record.staffReplies, ...record.codeSnippets].join(
-        " ",
-      ),
+      content: [
+        record.content,
+        record.acceptedAnswer ?? "",
+        ...record.staffReplies,
+        ...record.codeSnippets,
+      ].join(" "),
       description: record.tags.join(" "),
       path: record.url,
     },
@@ -176,6 +177,58 @@ async function buildDevForumIndex(store: IKeyValueStore): Promise<void> {
   _cachedRecords = records;
   _bm25.index(docs);
   observe({ event: "search.rebuild", source: "devforum", durationMs: elapsed() });
+}
+
+/**
+ * Searches DevForum records using the cached BM25 index when available,
+ * avoiding a full BM25 rebuild per query in multi-source search.
+ */
+export async function searchDevForumBm25(
+  store: IKeyValueStore,
+  query: string,
+  limit: number,
+): Promise<Array<{ record: DevForumRecord; score: number }>> {
+  const useCache = await ensureDevForumIndex(store);
+  if (useCache) {
+    if (_cachedRecords.length === 0) return [];
+    const byId = new Map(_cachedRecords.map((record) => [String(record.id), record]));
+    return _bm25
+      .search(query, limit)
+      .map((hit) => {
+        const record = byId.get(hit.id);
+        return record === undefined ? undefined : { record, score: hit.score };
+      })
+      .filter((entry): entry is { record: DevForumRecord; score: number } => entry !== undefined);
+  }
+
+  const entries = await storeGetByPrefix<DevForumRecord>(store, "devforum:");
+  if (entries.length === 0) return [];
+  const records = entries.map((entry) => entry.value);
+  const bm25 = new BM25();
+  bm25.index(
+    records.map((record) => ({
+      id: String(record.id),
+      fields: {
+        title: record.title,
+        path: record.url,
+        description: record.tags.join(" "),
+        content: [
+          record.content,
+          record.acceptedAnswer ?? "",
+          ...record.staffReplies,
+          ...record.codeSnippets,
+        ].join(" "),
+      },
+    })),
+  );
+  const byId = new Map(records.map((record) => [String(record.id), record]));
+  return bm25
+    .search(query, limit)
+    .map((hit) => {
+      const record = byId.get(hit.id);
+      return record === undefined ? undefined : { record, score: hit.score };
+    })
+    .filter((entry): entry is { record: DevForumRecord; score: number } => entry !== undefined);
 }
 
 async function ensureDevForumIndex(store: IKeyValueStore): Promise<boolean> {
@@ -247,8 +300,8 @@ export async function searchDevForumStore(
     }
 
     // Fallback: per-call store scan (used when no Indexer is registered, e.g. in unit tests).
-    const keys = (await store.keys()).filter((key) => key.startsWith("devforum:"));
-    if (keys.length === 0) {
+    const entries = await storeGetByPrefix<DevForumRecord>(store, "devforum:");
+    if (entries.length === 0) {
       return {
         query: options.query,
         results: [],
@@ -257,9 +310,7 @@ export async function searchDevForumStore(
       };
     }
 
-    const records = (await Promise.all(keys.map((key) => store.get<DevForumRecord>(key)))).filter(
-      (record): record is DevForumRecord => record !== null,
-    );
+    const records = entries.map((entry) => entry.value);
 
     const minScore = options.minScore ?? DEFAULT_MIN_SCORE;
     const limit = clampLimit(options.limit);

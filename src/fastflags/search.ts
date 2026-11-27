@@ -1,6 +1,6 @@
 import type { BM25Doc } from "../search/bm25.js";
 import { BM25 } from "../search/bm25.js";
-import type { IKeyValueStore } from "../store/index.js";
+import { type IKeyValueStore, storeGetByPrefix } from "../store/index.js";
 import type { Indexer } from "../store/indexer.js";
 import { observe, startTimer } from "../utils/logger.js";
 import type { FastFlag } from "./parser.js";
@@ -55,12 +55,11 @@ export class FastFlagSearch {
 
   private async buildIndex(): Promise<void> {
     const elapsed = startTimer();
-    const keys = (await this.store.keys()).filter((k) => k.startsWith("fastflags:"));
+    const entries = await storeGetByPrefix<FastFlag>(this.store, "fastflags:");
     const flags: FastFlag[] = [];
     const docs: BM25Doc[] = [];
 
-    for (const key of keys) {
-      const flag = await this.store.get<FastFlag>(key);
+    for (const { value: flag } of entries) {
       if (!flag) continue;
       flags.push(flag);
       docs.push({
