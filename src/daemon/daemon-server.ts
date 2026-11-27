@@ -1,13 +1,22 @@
 import net from "node:net";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
+import { setupRateLimiter } from "../devforum/http.js";
+import { initDevForumSearch } from "../devforum/search.js";
+import { Scheduler } from "../scheduler/index.js";
+import type { SeedManager } from "../scheduler/seed-manager.js";
+import { initIndexer } from "../search/index.js";
+import { createEmbeddingIndexer } from "../seed/runners.js";
 import { createServer, type ServerInstance } from "../server/index.js";
+import { createSeedManager } from "../server/seed-wiring.js";
 import {
   createSyncStateManager,
   type IKeyValueStore,
+  Indexer,
   SqliteStore,
   type SyncStateManager,
 } from "../store/index.js";
+import { logger } from "../utils/logger.js";
 import {
   DAEMON_HOST,
   DAEMON_PORT,
@@ -109,11 +118,55 @@ export async function startDaemonServer(
   let tcpServer: net.Server | null = null;
   const serverInstances = new Set<ServerInstance>();
 
+  let sharedScheduler: Scheduler | null = null;
+  let sharedSeedManager: SeedManager | null = null;
+
   try {
     await store.open();
     opened = true;
     const syncManager = createSyncStateManager(store);
     serializeStoreWrites(store);
+
+    let sharedIndexer: Indexer | undefined;
+    if (options.createMcpServer === undefined) {
+      sharedIndexer = new Indexer(store, syncManager);
+      initIndexer(store, syncManager, sharedIndexer);
+      initDevForumSearch(sharedIndexer);
+
+      sharedScheduler = new Scheduler();
+      setupRateLimiter(sharedScheduler.devForumRateLimiter);
+      sharedSeedManager = createSeedManager({
+        store,
+        syncManager,
+        indexer: sharedIndexer,
+        scheduler: sharedScheduler,
+        githubToken: options.githubToken,
+      });
+
+      sharedScheduler.start();
+      const seedMgr = sharedSeedManager;
+      setImmediate(() => {
+        const getDb = createEmbeddingIndexer(store)
+          ? () => (store as IKeyValueStore & { getDb(): import("better-sqlite3").Database }).getDb()
+          : undefined;
+        void seedMgr
+          .prepareStartup({ store, ...(getDb ? { getDb } : {}) })
+          .then(() => seedMgr.startBackground())
+          .catch((err: unknown) => {
+            logger.error(
+              `[Daemon] prepareStartup failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+            seedMgr.startBackground();
+          });
+      });
+    }
+
+    const stopSharedRuntime = (): void => {
+      sharedSeedManager?.stop();
+      sharedScheduler?.stop();
+      sharedSeedManager = null;
+      sharedScheduler = null;
+    };
 
     const idle = new IdleShutdown({
       idleMs: options.idleMs ?? 60_000,
@@ -123,6 +176,7 @@ export async function startDaemonServer(
           await Promise.resolve(instance.shutdown());
         }
         serverInstances.clear();
+        stopSharedRuntime();
         await store.close();
       },
     });
@@ -175,7 +229,11 @@ export async function startDaemonServer(
                 createServer({
                   store,
                   syncManager,
+                  ...(sharedIndexer ? { indexer: sharedIndexer } : {}),
+                  ...(sharedScheduler ? { scheduler: sharedScheduler } : {}),
+                  ...(sharedSeedManager ? { seedManager: sharedSeedManager } : {}),
                   initializeStore: false,
+                  autoStartScheduler: false,
                   ...(options.githubToken === undefined
                     ? {}
                     : { githubToken: options.githubToken }),
@@ -212,6 +270,7 @@ export async function startDaemonServer(
           await Promise.resolve(instance.shutdown());
         }
         serverInstances.clear();
+        stopSharedRuntime();
         await store.close();
       },
       activeConnections: () => idle.activeCount,
@@ -219,6 +278,8 @@ export async function startDaemonServer(
     };
   } catch (error) {
     if (tcpServer !== null) await closeTcpServer(tcpServer);
+    sharedSeedManager?.stop();
+    sharedScheduler?.stop();
     if (opened) await store.close();
     throw error;
   }
@@ -242,6 +303,14 @@ function serializeStoreWrites(store: IKeyValueStore): void {
   store.put = <T = unknown>(key: string, value: T) => enqueue(() => put(key, value));
   store.del = (key: string) => enqueue(() => del(key));
   store.clear = () => enqueue(() => clear());
+  if (typeof store.putMany === "function") {
+    const putMany = store.putMany.bind(store);
+    store.putMany = (entries) => enqueue(() => putMany(entries));
+  }
+  if (typeof store.delByPrefix === "function") {
+    const delByPrefix = store.delByPrefix.bind(store);
+    store.delByPrefix = (prefix) => enqueue(() => delByPrefix(prefix));
+  }
 }
 
 function listen(server: net.Server, port: number, host: string): Promise<void> {
