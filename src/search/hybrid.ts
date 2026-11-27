@@ -12,7 +12,7 @@ import { lookupApiCategory, lookupGuideMeta, searchApis, searchGuides } from "./
 type StoreWithDb = IKeyValueStore & { getDb(): Database.Database };
 
 function hasGetDb(store: IKeyValueStore): store is StoreWithDb {
-  return typeof (store as unknown as Record<string, unknown>)["getDb"] === "function";
+  return typeof (store as unknown as Record<string, unknown>).getDb === "function";
 }
 
 export interface RRFEntry {
