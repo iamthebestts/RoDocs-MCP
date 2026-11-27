@@ -1,0 +1,2 @@
+# Enforce LF line endings across all text files (matches biome.json lineEnding: "lf")
+* text=auto eol=lf
